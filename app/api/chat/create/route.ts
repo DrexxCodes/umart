@@ -14,15 +14,21 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Verify token
     const token = authHeader.replace('Bearer ', '')
     const decodedToken = await adminAuth.verifyIdToken(token)
 
     if (decodedToken.uid !== userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 403 }
-      )
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+    }
+
+    if (productId) {
+      const productDoc = await adminDb.collection('products').doc(productId).get()
+      if (productDoc.exists && productDoc.data()?.flagged === true) {
+        return NextResponse.json(
+          { success: false, error: 'This listing has been flagged by the platform and is currently unavailable.' },
+          { status: 403 }
+        )
+      }
     }
 
     // Check if chat already exists
@@ -35,31 +41,37 @@ export async function POST(req: NextRequest) {
       const data = doc.data()
       if (data.participantIds.includes(sellerId)) {
         return NextResponse.json(
-          {
-            success: true,
-            data: { chatId: doc.id },
-            message: 'Chat already exists',
-          },
+          { success: true, data: { chatId: doc.id }, message: 'Chat already exists' },
           { status: 200 }
         )
       }
     }
 
-    // Create new chat
+    // Resolve AI config from product if available
+    let aiEnabled = false
+    if (productId) {
+      const productDoc = await adminDb.collection('products').doc(productId).get()
+      if (productDoc.exists) {
+        const productData = productDoc.data()
+        aiEnabled = productData?.aiConfig?.enabled === true
+      }
+    }
+
     const chatRef = adminDb.collection('chats').doc()
     const batch = adminDb.batch()
 
-    // Get both users' data
     const userDoc = await adminDb.collection('users').doc(userId).get()
     const sellerDoc = await adminDb.collection('users').doc(sellerId).get()
 
     const userName = userDoc.data()?.fullname || 'User'
     const sellerName = sellerDoc.data()?.fullname || 'Seller'
 
-    // Chat document
     const chatData = {
       id: chatRef.id,
       participantIds: [userId, sellerId],
+      creatorId: sellerId,           // seller is the creator/product owner
+      aiEnabled,
+      humanTookOver: false,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       lastMessage: '',
@@ -70,52 +82,26 @@ export async function POST(req: NextRequest) {
 
     batch.set(chatRef, chatData)
 
-    // Participants subcollection for buyer
     batch.set(chatRef.collection('participants').doc(userId), {
-      userId,
-      username: userName,
-      joinedAt: Timestamp.now(),
+      userId, username: userName, joinedAt: Timestamp.now(),
     })
-
-    // Participants subcollection for seller
     batch.set(chatRef.collection('participants').doc(sellerId), {
-      userId: sellerId,
-      username: sellerName,
-      joinedAt: Timestamp.now(),
+      userId: sellerId, username: sellerName, joinedAt: Timestamp.now(),
     })
 
-    // Add to buyer's chats subcollection
     batch.set(
       adminDb.collection('users').doc(userId).collection('chats').doc(chatRef.id),
-      {
-        chatId: chatRef.id,
-        participantId: sellerId,
-        participantName: sellerName,
-        addedBy: 'setup',
-        createdAt: Timestamp.now(),
-      }
+      { chatId: chatRef.id, participantId: sellerId, participantName: sellerName, addedBy: 'setup', createdAt: Timestamp.now() }
     )
-
-    // Add to seller's chats subcollection
     batch.set(
       adminDb.collection('users').doc(sellerId).collection('chats').doc(chatRef.id),
-      {
-        chatId: chatRef.id,
-        participantId: userId,
-        participantName: userName,
-        addedBy: userId,
-        createdAt: Timestamp.now(),
-      }
+      { chatId: chatRef.id, participantId: userId, participantName: userName, addedBy: userId, createdAt: Timestamp.now() }
     )
 
     await batch.commit()
 
     return NextResponse.json(
-      {
-        success: true,
-        data: { chatId: chatRef.id },
-        message: 'Chat created successfully',
-      },
+      { success: true, data: { chatId: chatRef.id }, message: 'Chat created successfully' },
       { status: 201 }
     )
   } catch (error: any) {

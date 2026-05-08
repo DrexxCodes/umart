@@ -8,7 +8,7 @@ import {
 export interface ChartDataPoint {
   label:           string
   usersSignedUp:   number
-  totalEscrow:     number
+  totalPaid:     number
   totalWithdrawn:  number
   productsCreated: number
 }

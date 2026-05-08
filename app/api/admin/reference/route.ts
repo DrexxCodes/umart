@@ -85,6 +85,39 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ success: true })
 }
 
+// ── PATCH — toggle flagged status ─────────────────────────────────────────────
+
+export async function PATCH(request: NextRequest) {
+  const admin = await verifyAdmin(request)
+  if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  let body: Record<string, unknown>
+  try { body = await request.json() } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const { refId } = body
+  if (!refId || typeof refId !== 'string') {
+    return NextResponse.json({ error: 'Missing refId' }, { status: 400 })
+  }
+
+  const ref  = adminDb.collection('references').doc(refId)
+  const snap = await ref.get()
+  if (!snap.exists) return NextResponse.json({ error: 'Reference not found' }, { status: 404 })
+
+  const current    = snap.data()!
+  const newFlagged = !current.flagged
+
+  await ref.update({
+    flagged:        newFlagged,
+    flaggedAt:      newFlagged ? FieldValue.serverTimestamp() : null,
+    flaggedByAdmin: newFlagged ? admin.uid : null,
+    updatedAt:      FieldValue.serverTimestamp(),
+  })
+
+  return NextResponse.json({ success: true, flagged: newFlagged })
+}
+
 // ── DELETE — soft-delete: move to deleted_references, clean up user arrays ────
 
 export async function DELETE(request: NextRequest) {

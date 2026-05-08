@@ -6,7 +6,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Loader2, ChevronLeft, CheckCircle, Clock, XCircle, Banknote, User } from 'lucide-react'
+import { Loader2, ChevronLeft, CheckCircle, Clock, XCircle, Banknote, User, ShieldAlert } from 'lucide-react'
 import { CreatorNav } from '@/components/nav/creator-nav'
 import {
   AlertDialog,
@@ -32,7 +32,7 @@ interface SaleDetail {
   shippingFee: number
   platformFee: number
   grandPrice: number
-  status: string
+  status: 'pending' | 'paid' | 'failed' | 'disputing' | string
   valueReceived: boolean
   withdrawn: boolean
   createdAt: any
@@ -161,6 +161,11 @@ export function CreatorTransactionDetailClient() {
         classes: 'bg-red-100 text-red-700 border-red-200',
         label: 'Failed',
       },
+      disputing: {
+        icon: <ShieldAlert className="w-3.5 h-3.5" />,
+        classes: 'bg-amber-100 text-amber-700 border-amber-200',
+        label: 'Disputing',
+      },
     }
     const s = map[status] || map.pending
     return (
@@ -245,7 +250,14 @@ export function CreatorTransactionDetailClient() {
             Funds are released for withdrawal once the buyer confirms they have received value.
           </p>
 
-          {transaction.withdrawn ? (
+          {transaction.status === 'disputing' ? (
+            <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/25 bg-amber-500/8 px-4 py-3">
+              <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <span className="text-amber-700 dark:text-amber-300 text-sm font-medium">
+                Withdrawing is currently halted for this transaction as there's an ongoing dispute.
+              </span>
+            </div>
+          ) : transaction.withdrawn ? (
             <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
               <Banknote className="w-5 h-5 text-blue-600 shrink-0" />
               <span className="text-blue-700 text-sm font-medium">Funds successfully withdrawn</span>

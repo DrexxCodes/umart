@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Step1Category } from './components/Step1-Category'
 import { Step2Condition } from './components/Step2-Condition'
 import { Step3Images } from './components/Step3-Images'
+import { Step4AIConfig } from './components/Step4-AIConfig'
 import { AlertCircle, CheckCircle2 } from 'lucide-react'
 import { generateSearchKeywords } from '@/lib/slugify'
 import { CreatorNav } from '@/components/nav/creator-nav'
@@ -15,6 +16,19 @@ import { CreatorNav } from '@/components/nav/creator-nav'
 interface ProductAge {
   value: number
   unit: 'days' | 'months' | 'years'
+}
+
+interface FAQ {
+  question: string
+  answer: string
+}
+
+interface AIConfig {
+  enabled: boolean
+  tone: 'friendly' | 'professional' | 'playful' | 'firm'
+  priceFloor: string
+  faqs: FAQ[]
+  customContext: string
 }
 
 interface ProductData {
@@ -30,6 +44,7 @@ interface ProductData {
   defects: string
   additionalInfo: Record<string, string>
   images: string[]
+  aiConfig: AIConfig
 }
 
 const INITIAL_DATA: ProductData = {
@@ -45,7 +60,16 @@ const INITIAL_DATA: ProductData = {
   defects: '',
   additionalInfo: {},
   images: [],
+  aiConfig: {
+    enabled: false,
+    tone: 'friendly',
+    priceFloor: '',
+    faqs: [],
+    customContext: '',
+  },
 }
+
+const TOTAL_STEPS = 4
 
 export default function CreateProductClient() {
   const router = useRouter()
@@ -62,20 +86,19 @@ export default function CreateProductClient() {
 
   const handleNext = () => {
     if (currentStep === 1) {
-      // Auto-generate keywords when moving from step 1 to step 2 for phones
-      if (productData.category === 'phones' && productData.brand) {
+      if (productData.brand) {
         const keywords = generateSearchKeywords(productData.brand, productData.model)
-        setProductData((prev) => ({
-          ...prev,
-          searchKeywords: keywords,
-        }))
+        setProductData((prev) => ({ ...prev, searchKeywords: keywords }))
       }
       setCurrentStep(2)
       window.scrollTo({ top: 0, behavior: 'smooth' })
-    } else if (currentStep < 3) {
-      setCurrentStep(currentStep + 1)
+    } else if (currentStep === 2) {
+      setCurrentStep(3)
       window.scrollTo({ top: 0, behavior: 'smooth' })
-    } else {
+    } else if (currentStep === 3) {
+      setCurrentStep(4)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } else if (currentStep === 4) {
       handleCreateProduct()
     }
   }
@@ -94,12 +117,17 @@ export default function CreateProductClient() {
 
     try {
       const user = auth.currentUser
-
-      if (!user) {
-        throw new Error('You must be logged in to create a product')
-      }
+      if (!user) throw new Error('You must be logged in to create a product')
 
       const token = await user.getIdToken()
+
+      // Build the aiConfig payload — convert priceFloor string to number
+      const aiConfigPayload = productData.aiConfig.enabled
+        ? {
+            ...productData.aiConfig,
+            priceFloor: parseFloat(productData.aiConfig.priceFloor) || 0,
+          }
+        : null
 
       const response = await fetch('/api/creator/products', {
         method: 'POST',
@@ -107,18 +135,17 @@ export default function CreateProductClient() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(productData),
+        body: JSON.stringify({
+          ...productData,
+          aiConfig: aiConfigPayload,
+        }),
       })
 
       const result = await response.json()
 
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to create product')
-      }
+      if (!response.ok) throw new Error(result.error || 'Failed to create product')
 
       setSuccess('Product created successfully!')
-      
-      // Redirect to success page
       setTimeout(() => {
         router.push(`/creator/product/create/success?productId=${result.data.productId}`)
       }, 1000)
@@ -134,29 +161,23 @@ export default function CreateProductClient() {
     <div className="min-h-screen bg-background py-8 px-4 sm:px-6 lg:px-8">
       <CreatorNav />
       <div className="max-w-2xl mx-auto space-y-6">
-        {/* Header */}
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">Create Product Listing</h1>
-          <p className="text-muted-foreground">
-            Step {currentStep} of 3
-          </p>
+          <p className="text-muted-foreground">Step {currentStep} of {TOTAL_STEPS}</p>
         </div>
 
         {/* Progress Bar */}
         <div className="flex gap-2">
-          {[1, 2, 3].map((step) => (
+          {Array.from({ length: TOTAL_STEPS }, (_, i) => i + 1).map((step) => (
             <div
               key={step}
               className={`h-2 flex-1 rounded-full transition-colors ${
-                step <= currentStep
-                  ? 'bg-primary'
-                  : 'bg-muted'
+                step <= currentStep ? 'bg-primary' : 'bg-muted'
               }`}
             />
           ))}
         </div>
 
-        {/* Error Alert */}
         {error && (
           <Card className="border-destructive/50 bg-destructive/5 p-4">
             <div className="flex gap-3">
@@ -169,7 +190,6 @@ export default function CreateProductClient() {
           </Card>
         )}
 
-        {/* Success Alert */}
         {success && (
           <Card className="border-green-500/50 bg-green-50 dark:bg-green-950/30 p-4">
             <div className="flex gap-3">
@@ -179,15 +199,9 @@ export default function CreateProductClient() {
           </Card>
         )}
 
-        {/* Step Content */}
         {currentStep === 1 && (
-          <Step1Category
-            data={productData}
-            onChange={handleDataChange}
-            onNext={handleNext}
-          />
+          <Step1Category data={productData} onChange={handleDataChange} onNext={handleNext} />
         )}
-
         {currentStep === 2 && (
           <Step2Condition
             data={productData}
@@ -196,7 +210,6 @@ export default function CreateProductClient() {
             onPrevious={handlePrevious}
           />
         )}
-
         {currentStep === 3 && (
           <Step3Images
             data={productData}
@@ -205,8 +218,15 @@ export default function CreateProductClient() {
             onPrevious={handlePrevious}
           />
         )}
+        {currentStep === 4 && (
+          <Step4AIConfig
+            data={{ price: productData.price, aiConfig: productData.aiConfig }}
+            onChange={handleDataChange}
+            onNext={handleNext}
+            onPrevious={handlePrevious}
+          />
+        )}
 
-        {/* Loading State */}
         {loading && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <Card className="p-6 text-center space-y-2">

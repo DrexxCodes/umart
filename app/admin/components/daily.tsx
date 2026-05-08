@@ -26,7 +26,7 @@ async function fetchCustomDocs(ids: string[]): Promise<{ docs: AnalyticsDoc[]; g
 }
 
 function emptyDoc(id: string): AnalyticsDoc {
-  return { id, usersSignedUp:0, totalWithdrawn:0, totalEscrow:0, totalEscrowPayments:0, productsCreated:0, totalPlatformFee:0, updatedAt:null }
+  return { id, usersSignedUp:0, totalWithdrawn:0, totalPaid:0, totalPaidCount:0, productsCreated:0, totalPlatformFee:0, updatedAt:null }
 }
 
 function ChartBlock({ data, title }: { data: ChartDataPoint[]; title: string }) {
@@ -47,7 +47,7 @@ function StatGrid({ current, previous, label, globalFee, showGlobal=false }: {
       {label && <p className="text-[0.65rem] font-mono text-muted-foreground uppercase tracking-widest">{label}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         <StatCard label="Users Signed Up"       value={current.usersSignedUp}    currentValue={current.usersSignedUp}    previousValue={previous?.usersSignedUp}    accent="info"        />
-        <StatCard label="Escrow Paid In"        value={current.totalEscrow}      currentValue={current.totalEscrow}      previousValue={previous?.totalEscrow}      isCurrency accent="primary"     />
+        <StatCard label="Escrow Paid In"        value={current.totalPaid}      currentValue={current.totalPaid}      previousValue={previous?.totalPaid}      isCurrency accent="primary"     />
         <StatCard label="Total Withdrawn"       value={current.totalWithdrawn}   currentValue={current.totalWithdrawn}   previousValue={previous?.totalWithdrawn}   isCurrency accent="success"     />
         <StatCard label="Products Created"      value={current.productsCreated}  currentValue={current.productsCreated}  previousValue={previous?.productsCreated}  accent="secondary"   />
         <StatCard label="Daily Platform Fee"     value={current.totalPlatformFee} currentValue={current.totalPlatformFee} previousValue={previous?.totalPlatformFee} isCurrency accent="destructive" />
@@ -84,8 +84,8 @@ export function Daily({ docs, global, loading }: DailyProps) {
   const current     = sorted.find(d=>d.id===currentId) ?? emptyDoc(currentId)
   const previous    = sorted.find(d=>d.id!==currentId)
   const defaultChart: ChartDataPoint[] = sorted
-    .filter(d=>d.totalEscrow>0||d.usersSignedUp>0||d.productsCreated>0)
-    .map(d=>({ label:formatDayLabel(d.id), usersSignedUp:d.usersSignedUp, totalEscrow:d.totalEscrow, totalWithdrawn:d.totalWithdrawn, productsCreated:d.productsCreated }))
+    .filter(d=>d.totalPaid>0||d.usersSignedUp>0||d.productsCreated>0)
+    .map(d=>({ label:formatDayLabel(d.id), usersSignedUp:d.usersSignedUp, totalPaid:d.totalPaid, totalWithdrawn:d.totalWithdrawn, productsCreated:d.productsCreated }))
 
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-primary"/></div>
 
@@ -100,7 +100,7 @@ export function Daily({ docs, global, loading }: DailyProps) {
     if (timelineError)   return <div className="rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive">{timelineError}</div>
 
     const sortedCustom = [...customDocs].sort((a,b)=>a.id.localeCompare(b.id))
-    const customChart: ChartDataPoint[] = sortedCustom.map(d=>({ label:formatDayLabel(d.id), usersSignedUp:d.usersSignedUp, totalEscrow:d.totalEscrow, totalWithdrawn:d.totalWithdrawn, productsCreated:d.productsCreated }))
+    const customChart: ChartDataPoint[] = sortedCustom.map(d=>({ label:formatDayLabel(d.id), usersSignedUp:d.usersSignedUp, totalPaid:d.totalPaid, totalWithdrawn:d.totalWithdrawn, productsCreated:d.productsCreated }))
 
     if (selection.mode === 'view') {
       const doc = sortedCustom[0] ?? emptyDoc(selection.ids[0])
@@ -124,7 +124,7 @@ export function Daily({ docs, global, loading }: DailyProps) {
           <p className="text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">Δ Change A → B</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
             <StatCard label="Users Signed Up"       value={docB.usersSignedUp}    currentValue={docB.usersSignedUp}    previousValue={docA.usersSignedUp}    accent="info"        />
-            <StatCard label="Escrow Paid In"        value={docB.totalEscrow}      currentValue={docB.totalEscrow}      previousValue={docA.totalEscrow}      isCurrency accent="primary"     />
+            <StatCard label="Escrow Paid In"        value={docB.totalPaid}      currentValue={docB.totalPaid}      previousValue={docA.totalPaid}      isCurrency accent="primary"     />
             <StatCard label="Total Withdrawn"       value={docB.totalWithdrawn}   currentValue={docB.totalWithdrawn}   previousValue={docA.totalWithdrawn}   isCurrency accent="success"     />
             <StatCard label="Products Created"      value={docB.productsCreated}  currentValue={docB.productsCreated}  previousValue={docA.productsCreated}  accent="secondary"   />
             <StatCard label="Daily Platform Fee"     value={docB.totalPlatformFee} currentValue={docB.totalPlatformFee} previousValue={docA.totalPlatformFee} isCurrency accent="destructive" />

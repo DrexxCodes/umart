@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
-import { Timestamp } from 'firebase-admin/firestore'
+import { Timestamp, FieldValue } from 'firebase-admin/firestore'
 
 // GET: Fetch a specific product
 export async function GET(
@@ -31,7 +31,6 @@ export async function GET(
     const userId = decodedToken.uid
     const { productId } = await params
 
-    // Fetch product from user's collection to verify ownership
     const productDoc = await adminDb
       .collection('users')
       .doc(userId)
@@ -46,25 +45,14 @@ export async function GET(
       )
     }
 
-    const product = {
-      id: productDoc.id,
-      ...productDoc.data(),
-    }
-
     return NextResponse.json(
-      {
-        success: true,
-        data: product,
-      },
+      { success: true, data: { id: productDoc.id, ...productDoc.data() } },
       { status: 200 }
     )
   } catch (error: any) {
     console.error('Error fetching product:', error)
     return NextResponse.json(
-      {
-        success: false,
-        error: error.message || 'Failed to fetch product',
-      },
+      { success: false, error: error.message || 'Failed to fetch product' },
       { status: 500 }
     )
   }
@@ -100,7 +88,7 @@ export async function PATCH(
     const { productId } = await params
     const body = await req.json()
 
-    // Fetch original product to get old category
+    // Fetch original to get old category
     const originalDoc = await adminDb
       .collection('users')
       .doc(userId)
@@ -119,80 +107,113 @@ export async function PATCH(
     const oldCategory = originalData.category
     const newCategory = body.category || oldCategory
 
-    // Generate title if brand or model changed
     const title = body.model ? `${body.brand} ${body.model}` : body.brand
 
-    const updateData = {
-      ...body,
+    // Validate and sanitize Clara's config if provided and enabled
+    let aiConfigValue: any
+    if (body.aiConfig && typeof body.aiConfig === 'object' && body.aiConfig.enabled === true) {
+      const parsedPrice = parseFloat(body.price)
+      const floorVal = typeof body.aiConfig.priceFloor === 'number'
+        ? body.aiConfig.priceFloor
+        : parseFloat(body.aiConfig.priceFloor) || 0
+
+      aiConfigValue = {
+        enabled: true,
+        tone: ['friendly', 'professional', 'playful', 'firm'].includes(body.aiConfig.tone)
+          ? body.aiConfig.tone
+          : 'friendly',
+        priceFloor:
+          floorVal >= 0 && floorVal <= parsedPrice
+            ? floorVal
+            : Math.round(parsedPrice * 0.75),
+        faqs: Array.isArray(body.aiConfig.faqs)
+          ? body.aiConfig.faqs
+              .filter(
+                (f: any) =>
+                  f &&
+                  typeof f.question === 'string' &&
+                  typeof f.answer === 'string'
+              )
+              .slice(0, 10)
+          : [],
+        customContext:
+          typeof body.aiConfig.customContext === 'string'
+            ? body.aiConfig.customContext.slice(0, 1000)
+            : '',
+      }
+    } else {
+      // Clara disabled or not provided — remove the field entirely
+      aiConfigValue = FieldValue.delete()
+    }
+
+    const updateData: Record<string, any> = {
       title,
+      category: newCategory,
+      brand: body.brand,
+      model: body.model || '',
+      location: body.location,
+      price: parseFloat(body.price),
+      condition: body.condition,
+      productAge: body.productAge,
+      description: body.description || '',
+      defects: body.defects || '',
+      additionalInfo: body.additionalInfo || {},
+      images: Array.isArray(body.images) ? body.images : [],
+      aiConfig: aiConfigValue,
       updatedAt: Timestamp.now(),
     }
 
-    // Atomic write to update all product references
     const batch = adminDb.batch()
 
-    // 1. Update in main products collection
-    const mainProductRef = adminDb.collection('products').doc(productId)
-    batch.update(mainProductRef, updateData)
+    // 1. Main products collection
+    batch.update(adminDb.collection('products').doc(productId), updateData)
 
-    // 2. Update in user's products collection
-    const userProductRef = adminDb
-      .collection('users')
-      .doc(userId)
-      .collection('products')
-      .doc(productId)
-    batch.update(userProductRef, updateData)
+    // 2. User's products collection
+    batch.update(
+      adminDb.collection('users').doc(userId).collection('products').doc(productId),
+      updateData
+    )
 
-    // 3. Handle category change if needed
+    // 3. Category collection — handle category change
     if (oldCategory !== newCategory) {
       // Delete from old category
-      const oldCategoryRef = adminDb
-        .collection('productCategories')
-        .doc(oldCategory)
-        .collection('products')
-        .doc(productId)
-      batch.delete(oldCategoryRef)
-
-      // Add to new category
-      const newCategoryRef = adminDb
-        .collection('productCategories')
-        .doc(newCategory)
-        .collection('products')
-        .doc(productId)
-      batch.set(newCategoryRef, {
-        ...updateData,
-        categoryId: newCategory,
-      })
+      batch.delete(
+        adminDb
+          .collection('productCategories')
+          .doc(oldCategory)
+          .collection('products')
+          .doc(productId)
+      )
+      // Add to new category (set, not update — doc may not exist yet)
+      batch.set(
+        adminDb
+          .collection('productCategories')
+          .doc(newCategory)
+          .collection('products')
+          .doc(productId),
+        { ...updateData, categoryId: newCategory }
+      )
     } else {
-      // Update in same category
-      const categoryRef = adminDb
-        .collection('productCategories')
-        .doc(newCategory)
-        .collection('products')
-        .doc(productId)
-      batch.update(categoryRef, updateData)
+      batch.update(
+        adminDb
+          .collection('productCategories')
+          .doc(newCategory)
+          .collection('products')
+          .doc(productId),
+        updateData
+      )
     }
 
-    // Commit the batch
     await batch.commit()
 
     return NextResponse.json(
-      {
-        success: true,
-        data: {
-          productId,
-          message: 'Product updated successfully',
-        },
-      },
+      { success: true, data: { productId, message: 'Product updated successfully' } },
       { status: 200 }
     )
   } catch (error: any) {
     console.error('Error updating product:', error)
     return NextResponse.json(
-      {
-        success: false,
-        error: error.message || 'Failed to update product',
-      },
+      { success: false, error: error.message || 'Failed to update product' },
       { status: 500 }
     )
   }
@@ -235,7 +256,6 @@ export async function PUT(
       )
     }
 
-    // Verify ownership
     const productDoc = await adminDb
       .collection('users')
       .doc(userId)
@@ -250,25 +270,13 @@ export async function PUT(
       )
     }
 
-    const productData = productDoc.data() as any
-    const category = productData.category
+    const category = (productDoc.data() as any).category
+    const updateData = { status, updatedAt: Timestamp.now() }
 
-    // Atomic update across all collections
     const batch = adminDb.batch()
-
-    const updateData = {
-      status,
-      updatedAt: Timestamp.now(),
-    }
-
-    // Update in all three locations
     batch.update(adminDb.collection('products').doc(productId), updateData)
     batch.update(
-      adminDb
-        .collection('users')
-        .doc(userId)
-        .collection('products')
-        .doc(productId),
+      adminDb.collection('users').doc(userId).collection('products').doc(productId),
       updateData
     )
     batch.update(
@@ -283,23 +291,13 @@ export async function PUT(
     await batch.commit()
 
     return NextResponse.json(
-      {
-        success: true,
-        data: {
-          productId,
-          status,
-          message: `Product marked as ${status}`,
-        },
-      },
+      { success: true, data: { productId, status, message: `Product marked as ${status}` } },
       { status: 200 }
     )
   } catch (error: any) {
     console.error('Error updating product status:', error)
     return NextResponse.json(
-      {
-        success: false,
-        error: error.message || 'Failed to update product status',
-      },
+      { success: false, error: error.message || 'Failed to update product status' },
       { status: 500 }
     )
   }

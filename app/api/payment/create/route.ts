@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { rateLimit, getClientIp } from '@/lib/rate-limit'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
 import { Timestamp, FieldValue } from 'firebase-admin/firestore'
 
@@ -13,6 +14,11 @@ interface InvoiceItem {
 }
 
 export async function POST(req: NextRequest) {
+  const ip = getClientIp(req)
+  const rl = rateLimit(`payment-create:${ip}`, { limit: 20, windowSeconds: 60 })
+  if (!rl.success) {
+    return NextResponse.json({ success: false, error: 'Too many requests.' }, { status: 429 })
+  }
   try {
     // ── Auth ──────────────────────────────────────────────────────────────────
     const authHeader = req.headers.get('authorization')
@@ -72,6 +78,15 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         )
       }
+    }
+
+    // ── Payment ban check ────────────────────────────────────────────────────
+    const sellerDoc = await adminDb.collection('users').doc(sellerId).get()
+    if (sellerDoc.exists && sellerDoc.data()?.restrictions?.isPaymentBanned === true) {
+      return NextResponse.json(
+        { success: false, error: 'This account cannot create payments. Please contact support.' },
+        { status: 403 }
+      )
     }
 
     if (buyerId === sellerId) {
@@ -161,7 +176,7 @@ export async function POST(req: NextRequest) {
       sellerUserRef,
       {
         transactionRefs:     FieldValue.arrayUnion({ refId, type: 'sale' }),
-        pending:         FieldValue.increment(grandPrice),
+        pending:         FieldValue.increment(sellerPayout), // amount currently in limbo until payment confirmed
         pendingPayments: FieldValue.increment(1),
       },
       { merge: true }
@@ -169,11 +184,6 @@ export async function POST(req: NextRequest) {
 
     await batch.commit()
 
-    // ── Admin analytics — Nigerian timezone (WAT = UTC+1) ─────────────────────
-    // Separate try/catch: analytics failure must never roll back a committed invoice.
-    // createdAt is included on every merge write — because these docs are time-bucketed
-    // (one per day/month/year), the first write of each period sets it naturally.
-    // updatedAt is always refreshed on every invoice within the period.
     try {
       const nigerianTime = new Date(Date.now() + 60 * 60 * 1000)
 

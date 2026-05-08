@@ -1,9 +1,12 @@
-// Phone variants that should be expanded into search keywords
-const PHONE_VARIANTS = {
+// Generic keyword generator for any brand + model
+// Works for phones, laptops, shoes, gadgets, clothing, etc.
+
+// Common product variant suffixes worth expanding
+const PRODUCT_VARIANTS: Record<string, string[]> = {
   'plus': ['plus', '+'],
-  'pro': ['pr', 'pro'],
-  'pro max': ['pm', 'pro max'],
-  'ultra': ['u', 'ultra'],
+  'pro': ['pro'],
+  'pro max': ['pro max', 'pm'],
+  'ultra': ['ultra'],
   'max': ['max'],
   'lite': ['lite'],
   'mini': ['mini'],
@@ -16,106 +19,101 @@ const PHONE_VARIANTS = {
   'fold': ['fold'],
   'flip': ['flip'],
   'zoom': ['zoom'],
+  'air': ['air'],
+  'neo': ['neo'],
+  'slim': ['slim'],
+  'turbo': ['turbo'],
+  'smart': ['smart'],
+  'classic': ['classic'],
+  'sport': ['sport'],
+  'active': ['active'],
+  'elite': ['elite'],
+  'one': ['one'],
+  'gaming': ['gaming'],
 }
 
-export function generateSearchKeywords(brand: string, model: string): string[] {
+export function generateSearchKeywords(brand: string, model?: string): string[] {
   const brandLower = brand.toLowerCase().trim()
-  const modelLower = model.toLowerCase().trim()
+  const modelLower = (model ?? '').toLowerCase().trim()
 
   const keywords: Set<string> = new Set()
 
-  // Extract number patterns from model (e.g., "16", "s23", "14")
-  const numberMatches = modelLower.match(/\d+/g) || []
-  const numbers = numberMatches.length > 0 ? numberMatches[0] : ''
-
-  // Add base brand
+  // Always add the brand by itself
   keywords.add(brandLower)
 
-  // Add base model without extra spaces
-  const modelClean = modelLower.replace(/\s+/g, ' ')
-  keywords.add(modelClean)
+  // Also add individual brand words (e.g. "New Balance" → "new balance", "new", "balance")
+  brandLower.split(/\s+/).filter(Boolean).forEach((w) => keywords.add(w))
 
-  // Add brand + model combinations
-  if (modelClean) {
-    keywords.add(`${brandLower} ${modelClean}`)
+  if (!modelLower) {
+    return Array.from(keywords).filter((k) => k.length > 1).sort()
   }
 
-  // Process variants in the model
-  let remainingModel = modelClean
-  const variants: { variant: string; abbreviations: string[] }[] = []
+  // Add model and brand+model
+  keywords.add(modelLower)
+  keywords.add(`${brandLower} ${modelLower}`)
 
-  for (const [variant, abbrevs] of Object.entries(PHONE_VARIANTS)) {
-    if (modelClean.includes(variant)) {
-      variants.push({ variant, abbreviations: abbrevs })
-      remainingModel = remainingModel.replace(variant, '').trim()
-    }
-  }
-
-  // Add number-based keywords
-  if (numbers) {
-    keywords.add(numbers)
-
-    // Add number + variant combinations
-    variants.forEach(({ variant, abbreviations }) => {
-      // Full variant
-      keywords.add(`${numbers} ${variant}`)
-      
-      // Abbreviations
-      abbreviations.forEach(abbr => {
-        keywords.add(`${numbers}${abbr}`)
-        keywords.add(`${numbers} ${abbr}`)
-      })
-    })
-
-    // Add number + model (for names like Galaxy S25)
-    if (remainingModel && remainingModel !== numbers) {
-      const modelNamePart = remainingModel.replace(numbers, '').trim()
-      if (modelNamePart) {
-        keywords.add(`${modelNamePart} ${numbers}`)
-        keywords.add(`${brandLower} ${modelNamePart} ${numbers}`)
-      }
-    }
-  }
-
-  // Add variant combinations with brand
-  variants.forEach(({ variant, abbreviations }) => {
-    keywords.add(`${brandLower} ${variant}`)
-    abbreviations.forEach(abbr => {
-      keywords.add(`${brandLower} ${abbr}`)
-    })
+  // Extract all number sequences from the model
+  const numbers = modelLower.match(/\d+/g) ?? []
+  numbers.forEach((n) => {
+    keywords.add(n)
+    keywords.add(`${brandLower} ${n}`)
   })
 
-  // For Samsung Galaxy style phones
-  if (modelClean.includes('galaxy') && numbers) {
-    keywords.add(`galaxy ${numbers}`)
-    keywords.add(`${brandLower} galaxy ${numbers}`)
-    
-    variants.forEach(({ abbreviations }) => {
-      abbreviations.forEach(abbr => {
-        keywords.add(`galaxy s${abbr}`)
-        keywords.add(`s${abbr}`)
-      })
-    })
-  }
+  // Extract all non-numeric word tokens from the model
+  const modelWords = modelLower.replace(/\d+/g, ' ').split(/\s+/).filter((w) => w.length > 1)
+  modelWords.forEach((w) => {
+    keywords.add(w)
+    keywords.add(`${brandLower} ${w}`)
+    numbers.forEach((n) => keywords.add(`${w} ${n}`))
+  })
 
-  // For iPhone style phones
-  if (brandLower === 'apple' && modelClean.includes('iphone')) {
-    keywords.add('iphone')
-    if (numbers) {
-      keywords.add(`iphone ${numbers}`)
-      keywords.add(`iphone${numbers}`)
+  // Detect known variants in the model string and expand them
+  for (const [variant, aliases] of Object.entries(PRODUCT_VARIANTS)) {
+    if (modelLower.includes(variant)) {
+      aliases.forEach((alias) => {
+        keywords.add(alias)
+        keywords.add(`${brandLower} ${alias}`)
+        numbers.forEach((n) => {
+          keywords.add(`${n} ${alias}`)
+          keywords.add(`${n}${alias}`)
+          keywords.add(`${brandLower} ${n} ${alias}`)
+        })
+      })
     }
-    
-    variants.forEach(({ variant, abbreviations }) => {
-      keywords.add(`iphone ${variant}`)
-      abbreviations.forEach(abbr => {
-        keywords.add(`iphone ${abbr}`)
-      })
+  }
+
+  // Brand-specific expansions
+  // Apple iPhones
+  if (brandLower === 'apple' && modelLower.includes('iphone')) {
+    keywords.add('iphone')
+    numbers.forEach((n) => {
+      keywords.add(`iphone ${n}`)
+      keywords.add(`iphone${n}`)
     })
   }
 
-  // Filter out empty strings and sort for consistency
-  return Array.from(keywords)
-    .filter(k => k.length > 0)
-    .sort()
+  // Samsung Galaxy
+  if (brandLower === 'samsung' && modelLower.includes('galaxy')) {
+    keywords.add('galaxy')
+    numbers.forEach((n) => {
+      keywords.add(`galaxy ${n}`)
+      keywords.add(`samsung galaxy ${n}`)
+    })
+    modelWords.forEach((w) => {
+      if (w !== 'galaxy') {
+        numbers.forEach((n) => keywords.add(`galaxy ${w} ${n}`))
+      }
+    })
+  }
+
+  // Nike / Adidas / shoe brands — add size-agnostic terms
+  if (['nike', 'adidas', 'puma', 'reebok', 'new balance', 'converse', 'vans'].includes(brandLower)) {
+    keywords.add('shoes')
+    keywords.add('sneakers')
+    keywords.add('trainers')
+    keywords.add(`${brandLower} shoes`)
+    keywords.add(`${brandLower} sneakers`)
+  }
+
+  return Array.from(keywords).filter((k) => k.length > 1).sort()
 }

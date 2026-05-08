@@ -1,3 +1,5 @@
+// src/types/global.ts
+
 export interface PaystackResponse {
   reference: string;
   status: string;

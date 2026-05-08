@@ -18,24 +18,34 @@ interface Message {
   createdAt: any
   isSystemAdmin: boolean
   isCreator: boolean
+  isAI?: boolean
+  type?: string
+  paymentReferenceId?: string
+  agreedAmount?: number
+  grandPrice?: number
 }
 
 interface ChatAreaProps {
   chatId?: string
+  showTakeoverButton?: boolean
 }
 
 interface ChatInfo {
   productId?: string
   productName?: string
+  aiEnabled?: boolean
+  humanTookOver?: boolean
+  creatorId?: string
 }
 
-export function ChatArea({ chatId }: ChatAreaProps) {
+export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [messageSending, setMessageSending] = useState(false)
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null)
+  const [takeoverLoading, setTakeoverLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const lastMessageCountRef = useRef(0)
 
@@ -45,11 +55,8 @@ export function ChatArea({ chatId }: ChatAreaProps) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setCurrentUserId(user.uid)
-      }
+      if (user) setCurrentUserId(user.uid)
     })
-
     return () => unsubscribe()
   }, [])
 
@@ -69,7 +76,7 @@ export function ChatArea({ chatId }: ChatAreaProps) {
       try {
         setLoading(true)
         setError('')
-        
+
         const user = auth.currentUser
         if (!user) {
           setError('You must be logged in')
@@ -77,7 +84,6 @@ export function ChatArea({ chatId }: ChatAreaProps) {
           return
         }
 
-        // Listen to chat info
         const chatDocRef = doc(db, 'chats', chatId)
         unsubscribeChat = onSnapshot(
           chatDocRef,
@@ -87,6 +93,9 @@ export function ChatArea({ chatId }: ChatAreaProps) {
               setChatInfo({
                 productId: chatData?.productId,
                 productName: chatData?.productName,
+                aiEnabled: chatData?.aiEnabled ?? false,
+                humanTookOver: chatData?.humanTookOver ?? false,
+                creatorId: chatData?.creatorId,
               })
             } else {
               setError('Chat not found')
@@ -98,7 +107,6 @@ export function ChatArea({ chatId }: ChatAreaProps) {
           }
         )
 
-        // Listen to messages in real-time
         const messagesRef = collection(db, 'chats', chatId, 'messages')
         const messagesQuery = query(messagesRef, orderBy('createdAt', 'asc'))
 
@@ -115,16 +123,19 @@ export function ChatArea({ chatId }: ChatAreaProps) {
                 createdAt: data.createdAt,
                 isSystemAdmin: data.isSystemAdmin || false,
                 isCreator: data.isCreator || false,
+                isAI: data.isAI || false,
+                type: data.type,
+                paymentReferenceId: data.paymentReferenceId,
+                agreedAmount: data.agreedAmount,
+                grandPrice: data.grandPrice,
               }
             })
 
             setMessages(newMessages)
             setLoading(false)
 
-            // Only scroll if new messages were added
             if (newMessages.length > lastMessageCountRef.current) {
               lastMessageCountRef.current = newMessages.length
-              // Small delay to ensure DOM has updated
               setTimeout(scrollToBottom, 100)
             }
           },
@@ -144,12 +155,8 @@ export function ChatArea({ chatId }: ChatAreaProps) {
     setupRealtimeListeners()
 
     return () => {
-      if (unsubscribeMessages) {
-        unsubscribeMessages()
-      }
-      if (unsubscribeChat) {
-        unsubscribeChat()
-      }
+      if (unsubscribeMessages) unsubscribeMessages()
+      if (unsubscribeChat) unsubscribeChat()
       lastMessageCountRef.current = 0
     }
   }, [chatId])
@@ -170,24 +177,74 @@ export function ChatArea({ chatId }: ChatAreaProps) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          chatId,
-          text,
-        }),
+        body: JSON.stringify({ chatId, text }),
       })
 
       const result = await response.json()
-
       if (!result.success) {
         console.error('Failed to send message:', result.error)
         setError('Failed to send message')
       }
-      // No need to manually add message - real-time listener will handle it
     } catch (error) {
       console.error('Error sending message:', error)
       setError('Failed to send message')
     } finally {
       setMessageSending(false)
+    }
+  }
+
+  const handleTakeover = async () => {
+    if (!chatId) return
+    try {
+      setTakeoverLoading(true)
+      const user = auth.currentUser
+      if (!user) return
+      const token = await user.getIdToken()
+
+      const response = await fetch('/api/chat/takeover', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ chatId }),
+      })
+
+      const result = await response.json()
+      if (!result.success) {
+        setError(result.error || 'Failed to take over chat')
+      }
+    } catch (err) {
+      console.error('Takeover error:', err)
+      setError('Failed to take over chat')
+    } finally {
+      setTakeoverLoading(false)
+    }
+  }
+
+  const handleHandBackToAI = async () => {
+    if (!chatId) return
+    try {
+      setTakeoverLoading(true)
+      const user = auth.currentUser
+      if (!user) return
+      const token = await user.getIdToken()
+
+      const response = await fetch('/api/chat/takeover', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ chatId }),
+      })
+
+      const result = await response.json()
+      if (!result.success) setError(result.error || 'Failed to hand back to AI')
+    } catch (err) {
+      console.error('Hand back error:', err)
+    } finally {
+      setTakeoverLoading(false)
     }
   }
 
@@ -212,23 +269,60 @@ export function ChatArea({ chatId }: ChatAreaProps) {
     )
   }
 
+  const isAIActive = chatInfo?.aiEnabled && !chatInfo?.humanTookOver
+  const isHumanActive = chatInfo?.aiEnabled && chatInfo?.humanTookOver
+
   return (
     <div className="flex flex-col h-full">
+      {/* Takeover banner — only shown in creator chat when AI is enabled */}
+      {showTakeoverButton && chatInfo?.aiEnabled && (
+        <div
+          className={`flex items-center justify-between px-4 py-2 text-sm border-b ${
+            isAIActive
+              ? 'bg-violet-50 dark:bg-violet-950/30 border-violet-200 dark:border-violet-800'
+              : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+          }`}
+        >
+          <span
+            className={`font-medium ${
+              isAIActive ? 'text-violet-700 dark:text-violet-300' : 'text-amber-700 dark:text-amber-300'
+            }`}
+          >
+            {isAIActive ? '🤖 Clara is negotiating for you' : '👤 You are in control'}
+          </span>
+          {isAIActive ? (
+            <button
+              onClick={handleTakeover}
+              disabled={takeoverLoading}
+              className="text-xs bg-violet-600 hover:bg-violet-700 text-white px-3 py-1 rounded-full transition-colors disabled:opacity-50"
+            >
+              {takeoverLoading ? 'Taking over...' : 'Take Over'}
+            </button>
+          ) : (
+            <button
+              onClick={handleHandBackToAI}
+              disabled={takeoverLoading}
+              className="text-xs bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded-full transition-colors disabled:opacity-50"
+            >
+              {takeoverLoading ? 'Handing back...' : 'Hand Back to AI'}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto space-y-4 p-4">
-        {/* Warning Banner */}
         <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 mb-4">
           <p className="text-sm text-destructive font-medium">
             Chats are stored and we can review at any time. Buyers ensure to NOT MAKE PAYMENTS DIRECTLY IN SELLER ACCOUNT. Report any seller that asks you to make direct payment.
           </p>
         </div>
 
-        {/* Product Info */}
         {chatInfo?.productId && (
           <div className="bg-primary/10 border border-primary/30 rounded-lg p-3 mb-4">
             <p className="text-sm text-foreground">
               This chat started from this product:{' '}
               <a href={`/product/${chatInfo.productId}`} className="text-primary hover:underline font-medium">
-                {chatInfo.productName || `View Product`}
+                {chatInfo.productName || 'View Product'}
               </a>
             </p>
           </div>
@@ -263,6 +357,11 @@ export function ChatArea({ chatId }: ChatAreaProps) {
                     timestamp={messageDate}
                     isSystemAdmin={message.isSystemAdmin}
                     isCreator={message.isCreator}
+                    isAI={message.isAI}
+                    type={message.type}
+                    paymentReferenceId={message.paymentReferenceId}
+                    agreedAmount={message.agreedAmount}
+                    grandPrice={message.grandPrice}
                   />
                 )}
               </div>
@@ -271,6 +370,7 @@ export function ChatArea({ chatId }: ChatAreaProps) {
         )}
         <div ref={messagesEndRef} />
       </div>
+
       <ChatBox
         chatId={chatId}
         onSendMessage={handleSendMessage}

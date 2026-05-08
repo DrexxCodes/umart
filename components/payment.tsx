@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import type { PaystackResponse } from '@/types/global'
 
 export interface PaymentButtonProps {
   refId: string
@@ -17,6 +18,7 @@ export interface PaymentButtonProps {
   label?: string
   onSuccess?: () => void
   onClose?: () => void
+  onMounting?: () => void  // fires just before openIframe()
 }
 
 const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || ''
@@ -32,6 +34,7 @@ export function PaymentButton({
   label = 'Pay Now',
   onSuccess,
   onClose,
+  onMounting,
 }: PaymentButtonProps) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
@@ -39,25 +42,16 @@ export function PaymentButton({
   const handlePay = () => {
     setLoading(true)
 
-    const existingScript = document.getElementById('paystack-inline')
-    if (existingScript && typeof window.PaystackPop !== 'undefined') {
+    if (typeof window.PaystackPop !== 'undefined') {
       initPaystack()
       return
     }
 
-    toast.loading('Please hold while we set up with the payment provider...', {
-      id: 'paystack-loading',
-    })
-
     const script = document.createElement('script')
     script.id = 'paystack-inline'
     script.src = 'https://js.paystack.co/v1/inline.js'
-    script.onload = () => {
-      toast.dismiss('paystack-loading')
-      initPaystack()
-    }
+    script.onload = () => initPaystack()
     script.onerror = () => {
-      toast.dismiss('paystack-loading')
       toast.error('Failed to load payment provider. Please try again.')
       setLoading(false)
     }
@@ -71,33 +65,37 @@ export function PaymentButton({
       return
     }
 
-    // Open Paystack directly — no dialog closing, no timeouts, no unmounting.
-    // Paystack renders its own iframe over the page with its own close button.
     const handler = window.PaystackPop.setup({
       key: PAYSTACK_PUBLIC_KEY,
       email: buyerEmail,
-      amount: Math.round(grandPrice * 100),
-      ref: refId,
+      amount: grandPrice * 100,
       currency: 'NGN',
+      ref: refId,
       metadata: {
         custom_fields: [
-          { display_name: 'Name', variable_name: 'buyer_name', value: buyerName },
-          { display_name: 'Phone', variable_name: 'buyer_phone', value: buyerPhone || '' },
+          { display_name: 'Name', variable_name: 'name', value: buyerName },
+          { display_name: 'Phone', variable_name: 'phone', value: buyerPhone || '' },
         ],
+      },
+      callback: (response: PaystackResponse) => {
+        setLoading(false)
+        if (response.status === 'success') {
+          toast.success('Payment successful! Redirecting...')
+          onSuccess?.()
+          router.push(`/success?refId=${response.reference}`)
+        } else {
+          toast.error('Payment was not completed. Please try again.')
+        }
       },
       onClose: () => {
         setLoading(false)
-        toast.warning('You cancelled the payment. Your order is still saved.')
         onClose?.()
-      },
-      callback: (response: { reference: string }) => {
-        setLoading(false)
-        toast.success('Payment successful! Redirecting...')
-        onSuccess?.()
-        router.push(`/payment/success?refId=${response.reference}`)
       },
     })
 
+    // Fire onMounting BEFORE openIframe so the parent can close the dialog
+    // before the Paystack overlay renders on top
+    onMounting?.()
     handler.openIframe()
   }
 

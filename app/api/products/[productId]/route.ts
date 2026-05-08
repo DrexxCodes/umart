@@ -7,7 +7,6 @@ export async function GET(
 ) {
   try {
     const { productId } = await context.params
-    console.log('Product ID from params:', productId)
 
     if (!productId) {
       return NextResponse.json(
@@ -31,7 +30,12 @@ export async function GET(
       success: true,
       data: {
         id: doc.id,
+        userId: data?.userId ?? null,
         ...data,
+        // Never expose aiConfig secrets (priceFloor) to the public
+        aiConfig: data?.aiConfig
+          ? { tone: data.aiConfig.tone, hasAI: true }
+          : null,
         createdAt: data?.createdAt?.toDate?.() || data?.createdAt,
       },
     })

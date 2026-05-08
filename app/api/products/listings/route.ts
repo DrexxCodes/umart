@@ -1,19 +1,6 @@
 // app/api/products/listing/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import { initializeApp, getApps, cert } from 'firebase-admin/app'
-import { getFirestore } from 'firebase-admin/firestore'
-
-if (!getApps().length) {
-  try {
-    initializeApp({
-      credential: cert(JSON.parse(process.env.FIREBASE_ADMIN_SDK_KEY || '{}')),
-    })
-  } catch {
-    console.error('Firebase Admin initialization failed')
-  }
-}
-
-const db = getFirestore()
+import { adminDb } from '@/lib/firebase-admin'
 
 // Hardcoded categories — update to match your Firestore category IDs
 const CATEGORIES = [
@@ -36,7 +23,7 @@ export async function GET(request: NextRequest) {
     // Fetch 3 active products from each category in parallel
     const categoryFetches = CATEGORIES.map(async (categoryId) => {
       try {
-        const snapshot = await db
+        const snapshot = await adminDb
           .collection('productCategories')
           .doc(categoryId)
           .collection('products')

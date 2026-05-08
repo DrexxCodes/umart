@@ -26,20 +26,20 @@ export default function CategoriesClient() {
         setIsLoading(true)
         setError(null)
 
-        console.log('[v0] Fetching categories from /api/creator/products/categories')
+        console.log('  Fetching categories from /api/creator/products/categories')
         const response = await fetch('/api/creator/products/categories')
         const result = await response.json()
-        console.log('[v0] Categories response:', result)
+        console.log('  Categories response:', result)
 
         if (result.success) {
           const categoriesData = result.data || []
-          console.log('[v0] Setting categories:', categoriesData)
+          console.log('  Setting categories:', categoriesData)
           setCategories(categoriesData)
         } else {
           setError(result.error || 'Failed to fetch categories')
         }
       } catch (err) {
-        console.error('[v0] Error fetching categories:', err)
+        console.error('  Error fetching categories:', err)
         setError(err instanceof Error ? err.message : 'An error occurred')
       } finally {
         setIsLoading(false)

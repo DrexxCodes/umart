@@ -2,7 +2,10 @@
 
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
-import { Moon, Sun, LayoutDashboard, Plus, Package, MessageCircle, User, DollarSign, Menu, X } from 'lucide-react'
+import {
+  Moon, Sun, LayoutDashboard, Plus, Package, MessageCircle,
+  DollarSign, BadgeDollarSign, Menu, X, ShieldAlert, BookOpen,
+} from 'lucide-react'
 import { useState, useEffect } from 'react'
 
 export function CreatorNav() {
@@ -10,20 +13,19 @@ export function CreatorNav() {
   const [isOpen, setIsOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
 
-  // Prevent hydration mismatch by only rendering theme-dependent UI after mount
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  useEffect(() => { setMounted(true) }, [])
 
   const toggleMenu = () => setIsOpen(!isOpen)
 
   const navItems = [
-    { label: 'Dashboard', href: '/creator/dashboard', icon: LayoutDashboard },
-    { label: 'Create Product', href: '/creator/product/create', icon: Plus },
-    { label: 'My Products', href: '/creator/my-products', icon: Package },
-    { label: 'Chats', href: '/creator/chats', icon: MessageCircle },
-    { label: 'Profile', href: '/creator/profile', icon: User },
-    { label: 'Transactions', href: '/creator/transactions', icon: DollarSign },
+    { label: 'Dashboard',      href: '/creator/dashboard',         icon: LayoutDashboard },
+    { label: 'Create Product', href: '/creator/product/create',    icon: Plus },
+    { label: 'My Products',    href: '/creator/product/my-products', icon: Package },
+    { label: 'Chats',          href: '/creator/chat',              icon: MessageCircle },
+    { label: 'Invoice',        href: '/creator/invoice',           icon: BadgeDollarSign },
+    { label: 'Transactions',   href: '/creator/transactions',      icon: DollarSign },
+    { label: 'Disputes',       href: '/creator/disputes',          icon: ShieldAlert },
+    { label: 'Catalogue',      href: '/creator/catalogue',         icon: BookOpen },
   ]
 
   return (
@@ -39,7 +41,7 @@ export function CreatorNav() {
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-6 lg:gap-8">
+          <div className="hidden md:flex items-center gap-5 lg:gap-7">
             {navItems.map((item) => {
               const Icon = item.icon
               return (
@@ -63,7 +65,6 @@ export function CreatorNav() {
               aria-label="Toggle theme"
             >
               {!mounted ? (
-                // Render a placeholder during SSR to prevent hydration mismatch
                 <div className="w-5 h-5" />
               ) : theme === 'dark' ? (
                 <Sun className="w-5 h-5" />
@@ -72,17 +73,12 @@ export function CreatorNav() {
               )}
             </button>
 
-            {/* Mobile menu button */}
             <button
               onClick={toggleMenu}
               className="md:hidden p-2 rounded-lg hover:bg-muted transition-colors"
               aria-label="Toggle menu"
             >
-              {isOpen ? (
-                <X className="w-5 h-5" />
-              ) : (
-                <Menu className="w-5 h-5" />
-              )}
+              {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
           </div>
         </div>

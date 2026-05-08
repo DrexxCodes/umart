@@ -363,7 +363,7 @@ export function Step3Images({
               Uploading {uploadingCount}...
             </>
           ) : (
-            'Create Product'
+            'Next Step'
           )}
         </Button>
       </div>

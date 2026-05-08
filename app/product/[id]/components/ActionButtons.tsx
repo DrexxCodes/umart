@@ -8,9 +8,10 @@ interface Props {
   onReport: () => void
   contactingLoading: boolean
   isOwner: boolean
+  contactError?: string | null
 }
 
-export function ActionButtons({ onContactSeller, onReport, contactingLoading, isOwner }: Props) {
+export function ActionButtons({ onContactSeller, onReport, contactingLoading, isOwner, contactError }: Props) {
   return (
     <div className="space-y-3">
       {/* Contact Seller */}
@@ -31,6 +32,14 @@ export function ActionButtons({ onContactSeller, onReport, contactingLoading, is
           </>
         )}
       </Button>
+
+      {/* Error message (e.g. flagged product) */}
+      {contactError && (
+        <div className="flex items-start gap-2 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2.5">
+          <Flag className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
+          <p className="text-xs text-destructive leading-snug">{contactError}</p>
+        </div>
+      )}
 
       {/* Report */}
       {!isOwner && (

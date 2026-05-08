@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb } from '@/lib/firebase-admin'
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
-import crypto from 'crypto'
-
-// ── Disable Next.js body parsing so the raw body can be read for HMAC
-export const config = {
-  api: { bodyParser: false },
-}
+import { verifyWebhookSignature } from '@/lib/paystack'
 
 async function getRawBody(req: NextRequest): Promise<Buffer> {
   const chunks: Uint8Array[] = []
@@ -23,140 +18,198 @@ async function getRawBody(req: NextRequest): Promise<Buffer> {
 export async function POST(req: NextRequest) {
   try {
     const rawBody = await getRawBody(req)
-    const signature = req.headers.get('x-paystack-signature')
-    const secret = process.env.PAYSTACK_SECRET_KEY || ''
+    const signature = req.headers.get('x-paystack-signature') || ''
 
-    // ── Verify Paystack HMAC signature ────────────────────────────────────────
-    const hash = crypto
-      .createHmac('sha512', secret)
-      .update(rawBody)
-      .digest('hex')
-
-    if (hash !== signature) {
+    if (!verifyWebhookSignature(rawBody.toString('utf8'), signature)) {
       console.warn('[webhook] Invalid Paystack signature — request rejected')
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
     }
 
     const event = JSON.parse(rawBody.toString('utf8'))
 
-    // ── Only handle successful charge events ──────────────────────────────────
-    if (event.event !== 'charge.success') {
-      return NextResponse.json({ received: true }, { status: 200 })
+    if (event.event === 'charge.success') {
+      await handleChargeSuccess(event.data)
+    } else if (event.event === 'transfer.success') {
+      await handleTransferSuccess(event.data)
+    } else if (event.event === 'transfer.failed' || event.event === 'transfer.reversed') {
+      await handleTransferFailed(event.data, event.event)
     }
 
-    const data = event.data
-    const refId: string = data.reference          // we set this to refId on Paystack setup
-    const amountPaid: number = data.amount / 100  // Paystack sends kobo → convert to Naira
-
-    // ── Fetch the reference document ──────────────────────────────────────────
-    const refDoc = await adminDb.collection('references').doc(refId).get()
-
-    if (!refDoc.exists) {
-      console.error(`[webhook] Reference doc not found: ${refId}`)
-      // Return 200 so Paystack doesn't retry — we just log the miss
-      return NextResponse.json({ received: true }, { status: 200 })
-    }
-
-    const refData = refDoc.data()!
-
-    // Guard: idempotency check
-    if (refData.status === 'paid') {
-      console.log(`[webhook] ${refId} already marked paid — skipping`)
-      return NextResponse.json({ received: true }, { status: 200 })
-    }
-
-    const sellerId: string  = refData.sellerId
-    const grandPrice: number = refData.grandPrice ?? amountPaid
-    const itemsTotal: number = refData.itemsTotal ?? 0
-    const now = Timestamp.now()
-
-    // ── Platform fee: 5% of grand price + ₦300 flat ──────────────────────────
-    // Calculated fresh from grandPrice to keep analytics consistent regardless
-    // of what was stored on the reference doc at order time.
-    const platformFee: number = parseFloat(((grandPrice * 0.05) + 300).toFixed(2))
-
-    // ── Build all atomic writes in a single batch ─────────────────────────────
-    const batch = adminDb.batch()
-
-    // 1. Mark reference as paid
-    batch.update(adminDb.collection('references').doc(refId), {
-      status: 'paid',
-      updatedAt: now,
-    })
-
-    // 2. Update seller's escrow totals in users/{sellerId}
-    const sellerRef = adminDb.collection('users').doc(sellerId)
-    batch.set(
-      sellerRef,
-      {
-        totalEscrowPaid:      FieldValue.increment(grandPrice), // running Naira balance paid into escrow
-        totalEscrowPaidCount: FieldValue.increment(1),          // count of completed escrow payments
-      },
-      { merge: true }
-    )
-
-    // 3. Store per-transaction record in admin/escrow/transactions/{refId}
-    const escrowTxRef = adminDb
-      .collection('admin')
-      .doc('escrow')
-      .collection('transactions')
-      .doc(refId)
-
-    batch.set(escrowTxRef, {
-      refId,
-      sellerId,
-      buyerId:     refData.buyerId,
-      itemAmount:  itemsTotal,
-      platformFee, // recalculated value stored with the transaction
-      grandPrice,
-      paidAt: now,
-    })
-
-    // 4. Admin global totals — all-time cumulative at admin/global
-    //    Stores: total money paid into escrow, total platform fee earned, total transaction count
-    const globalRef = adminDb.collection('admin').doc('global')
-    batch.set(
-      globalRef,
-      {
-        totalEscrow:          FieldValue.increment(grandPrice),   // all-time escrow paid in (₦)
-        totalPlatformFee:     FieldValue.increment(platformFee),  // all-time platform fee earned (₦)
-        totalTransactions:    FieldValue.increment(1),            // all-time transaction count
-        updatedAt:            FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    )
-
-    // 5. Admin analytics — daily / monthly / yearly
-    //    Each period doc accumulates totals for that window.
-    const nigerianTime = new Date(Date.now() + 60 * 60 * 1000) // WAT = UTC+1
-
-    const year  = nigerianTime.getUTCFullYear().toString()
-    const month = `${nigerianTime.getUTCFullYear()}-${String(nigerianTime.getUTCMonth() + 1).padStart(2, '0')}`
-    const day   = `${nigerianTime.getUTCFullYear()}-${String(nigerianTime.getUTCMonth() + 1).padStart(2, '0')}-${String(nigerianTime.getUTCDate()).padStart(2, '0')}`
-
-    const analyticsPayload = {
-      totalPaid:        FieldValue.increment(grandPrice),  // escrow paid in for this period (₦)
-      totalPlatformFee: FieldValue.increment(platformFee), // platform fee earned this period (₦)
-      totalPaidCount:   FieldValue.increment(1),           // number of payments this period
-      createdAt:        FieldValue.serverTimestamp(),      // set naturally on first write per period
-      updatedAt:        FieldValue.serverTimestamp(),      // refreshed on every write
-    }
-
-    const dailyRef   = adminDb.collection('admin').doc('analytics').collection('daily').doc(day)
-    const monthlyRef = adminDb.collection('admin').doc('analytics').collection('monthly').doc(month)
-    const yearlyRef  = adminDb.collection('admin').doc('analytics').collection('yearly').doc(year)
-
-    batch.set(dailyRef,   analyticsPayload, { merge: true })
-    batch.set(monthlyRef, analyticsPayload, { merge: true })
-    batch.set(yearlyRef,  analyticsPayload, { merge: true })
-
-    await batch.commit()
-
-    console.log(`[webhook] Processed charge.success — refId: ${refId}, grandPrice: ₦${grandPrice}, platformFee: ₦${platformFee}`)
     return NextResponse.json({ received: true }, { status: 200 })
   } catch (error: any) {
     console.error('[webhook] Error processing Paystack event:', error)
-    // Return 200 so Paystack doesn't retry on server errors — log for investigation
     return NextResponse.json({ received: true }, { status: 200 })
+  }
+}
+
+async function handleChargeSuccess(data: any) {
+  const refId: string = data.reference
+  // Paystack amount is in kobo — convert to naira
+  const amountPaid: number = data.amount / 100
+
+  const refDoc = await adminDb.collection('references').doc(refId).get()
+  if (!refDoc.exists) {
+    console.error(`[webhook] Reference doc not found: ${refId}`)
+    return
+  }
+
+  const refData = refDoc.data()!
+  if (refData.status === 'paid') {
+    console.log(`[webhook] ${refId} already marked paid — skipping`)
+    return
+  }
+
+  const sellerId: string = refData.sellerId
+  const grandPrice: number = refData.grandPrice ?? amountPaid
+  const itemsTotal: number = refData.itemsTotal ?? 0
+  const sellerPayout: number = refData.sellerPayout ?? grandPrice
+  const now = Timestamp.now()
+  const platformFee: number = parseFloat(((grandPrice * 0.05) + 300).toFixed(2))
+
+  const batch = adminDb.batch()
+
+  batch.update(adminDb.collection('references').doc(refId), {
+    status: 'paid',
+    paystackRef: data.id,
+    updatedAt: now,
+  })
+
+  const sellerRef = adminDb.collection('users').doc(sellerId)
+  batch.set(sellerRef, {
+    totalEscrowPaid: FieldValue.increment(sellerPayout),
+    totalEscrowPaidCount: FieldValue.increment(1),
+    pending: FieldValue.increment(-grandPrice),
+    pendingPayments: FieldValue.increment(-1),
+  }, { merge: true })
+
+  const escrowTxRef = adminDb.collection('admin').doc('escrow').collection('transactions').doc(refId)
+  batch.set(escrowTxRef, {
+    refId,
+    sellerId,
+    buyerId: refData.buyerId,
+    itemAmount: itemsTotal,
+    platformFee,
+    grandPrice,
+    sellerPayout,
+    paidAt: now,
+  })
+
+  const globalRef = adminDb.collection('admin').doc('global')
+  batch.set(globalRef, {
+    totalEscrow: FieldValue.increment(grandPrice),
+    totalPlatformFee: FieldValue.increment(platformFee),
+    totalTransactions: FieldValue.increment(1),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true })
+
+  const nigerianTime = new Date(Date.now() + 60 * 60 * 1000)
+  const year = nigerianTime.getUTCFullYear().toString()
+  const month = `${nigerianTime.getUTCFullYear()}-${String(nigerianTime.getUTCMonth() + 1).padStart(2, '0')}`
+  const day = `${nigerianTime.getUTCFullYear()}-${String(nigerianTime.getUTCMonth() + 1).padStart(2, '0')}-${String(nigerianTime.getUTCDate()).padStart(2, '0')}`
+
+  const analyticsPayload = {
+    totalPaid: FieldValue.increment(grandPrice),
+    totalPlatformFee: FieldValue.increment(platformFee),
+    totalPaidCount: FieldValue.increment(1),
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }
+
+  batch.set(adminDb.collection('admin').doc('analytics').collection('daily').doc(day), analyticsPayload, { merge: true })
+  batch.set(adminDb.collection('admin').doc('analytics').collection('monthly').doc(month), analyticsPayload, { merge: true })
+  batch.set(adminDb.collection('admin').doc('analytics').collection('yearly').doc(year), analyticsPayload, { merge: true })
+
+  await batch.commit()
+  console.log(`[webhook] charge.success — refId: ${refId}, grandPrice: ₦${grandPrice}`)
+}
+
+async function handleTransferSuccess(data: any) {
+  const reference: string = data.reference ?? ''
+
+  // Seller payout reference: "withdraw-{refId}-{timestamp}"
+  if (reference.startsWith('withdraw-')) {
+    const refId = reference.replace(/^withdraw-/, '').replace(/-\d+$/, '')
+    const payQueueDoc = await adminDb.collection('payQueue').doc(refId).get()
+    if (!payQueueDoc.exists) {
+      console.warn(`[webhook] transfer.success — payQueue doc not found for refId: ${refId}`)
+      return
+    }
+    await adminDb.collection('payQueue').doc(refId).update({
+      status: 'paid',
+      paidAt: FieldValue.serverTimestamp(),
+      transferCode: data.transfer_code,
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    console.log(`[webhook] transfer.success (payout) — refId: ${refId}`)
+    return
+  }
+
+  // Buyer refund reference: "refund-{disputeId}-{timestamp}"
+  if (reference.startsWith('refund-')) {
+    const disputeId = reference.replace(/^refund-/, '').replace(/-\d+$/, '')
+    const disputeDoc = await adminDb.collection('disputes').doc(disputeId).get()
+    if (!disputeDoc.exists) {
+      console.warn(`[webhook] transfer.success — dispute doc not found for disputeId: ${disputeId}`)
+      return
+    }
+    const batch = adminDb.batch()
+    batch.update(adminDb.collection('disputes').doc(disputeId), {
+      status: 'refunded',
+      refundedAt: FieldValue.serverTimestamp(),
+      transferCode: data.transfer_code,
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    // Also update the transaction reference status
+    const disputeData = disputeDoc.data()!
+    if (disputeData.txnId) {
+      batch.update(adminDb.collection('references').doc(disputeData.txnId), {
+        status: 'refunded',
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+    }
+    await batch.commit()
+    console.log(`[webhook] transfer.success (refund) — disputeId: ${disputeId}`)
+  }
+}
+
+async function handleTransferFailed(data: any, eventType: string) {
+  const reference: string = data.reference ?? ''
+  const failureReason = eventType === 'transfer.reversed'
+    ? 'Transfer was reversed by Paystack'
+    : (data.gateway_response ?? 'Transfer failed')
+
+  if (reference.startsWith('withdraw-')) {
+    const refId = reference.replace(/^withdraw-/, '').replace(/-\d+$/, '')
+    const payQueueDoc = await adminDb.collection('payQueue').doc(refId).get()
+    if (!payQueueDoc.exists) return
+
+    const batch = adminDb.batch()
+    batch.update(adminDb.collection('payQueue').doc(refId), {
+      status: 'failed',
+      failureReason,
+      failedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    // Revert withdrawn so seller can retry
+    batch.update(adminDb.collection('references').doc(refId), {
+      withdrawn: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    await batch.commit()
+    console.log(`[webhook] ${eventType} (payout) — refId: ${refId}`)
+    return
+  }
+
+  if (reference.startsWith('refund-')) {
+    const disputeId = reference.replace(/^refund-/, '').replace(/-\d+$/, '')
+    const disputeDoc = await adminDb.collection('disputes').doc(disputeId).get()
+    if (!disputeDoc.exists) return
+
+    await adminDb.collection('disputes').doc(disputeId).update({
+      refundTransferStatus: 'failed',
+      refundFailureReason: failureReason,
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    console.log(`[webhook] ${eventType} (refund) — disputeId: ${disputeId}`)
   }
 }

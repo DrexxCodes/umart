@@ -21,15 +21,23 @@ const ACCENT = {
   secondary:   { border: 'border-secondary/30',    icon: 'text-secondary',         bg: 'bg-secondary/8'    },
 }
 
+/**
+ * Format a value for stat cards:
+ * - Billions: always shorten (e.g. ₦1.2B)
+ * - Millions: always shorten (e.g. ₦2.5M)
+ * - Thousands and below: show full number with commas (e.g. ₦10,300 not ₦10.3k)
+ */
 function formatValue(val: number, isCurrency: boolean, prefix = '', suffix = ''): string {
-  if (isCurrency) {
-    if (val >= 1_000_000) return `${prefix}₦${(val / 1_000_000).toFixed(1)}M${suffix}`
-    if (val >= 1_000)     return `${prefix}₦${(val / 1_000).toFixed(1)}k${suffix}`
-    return `${prefix}₦${val.toLocaleString()}${suffix}`
+  const currencySign = isCurrency ? '₦' : ''
+
+  if (val >= 1_000_000_000) {
+    return `${prefix}${currencySign}${(val / 1_000_000_000).toFixed(1)}B${suffix}`
   }
-  if (val >= 1_000_000) return `${prefix}${(val / 1_000_000).toFixed(1)}M${suffix}`
-  if (val >= 1_000)     return `${prefix}${(val / 1_000).toFixed(1)}k${suffix}`
-  return `${prefix}${val.toLocaleString()}${suffix}`
+  if (val >= 1_000_000) {
+    return `${prefix}${currencySign}${(val / 1_000_000).toFixed(1)}M${suffix}`
+  }
+  // Under 1 million: always show full number
+  return `${prefix}${currencySign}${val.toLocaleString('en-NG')}${suffix}`
 }
 
 export function StatCard({

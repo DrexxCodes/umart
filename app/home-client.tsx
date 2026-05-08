@@ -57,9 +57,9 @@ export default function HomePage() {
             <h1 className="text-6xl sm:text-7xl lg:text-8xl font-extrabold tracking-tight leading-none">
               U<span className="text-primary relative title-accent-line">Mart</span>
             </h1>
-            <p className="text-muted-foreground text-base sm:text-lg max-w-sm">
+            {/* <p className="text-muted-foreground text-base sm:text-lg max-w-sm">
               Quality items · Verified sellers · Great prices
-            </p>
+            </p> */}
             <div className="w-full max-w-2xl mt-2">
               <SearchBar onSearch={handleSearch} isLoading={isLoading} />
             </div>

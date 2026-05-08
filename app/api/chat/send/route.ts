@@ -14,12 +14,10 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Verify token
     const token = authHeader.replace('Bearer ', '')
     const decodedToken = await adminAuth.verifyIdToken(token)
     const userId = decodedToken.uid
 
-    // Verify user is participant in this chat
     const chatSnapshot = await adminDb.collection('chats').doc(chatId).get()
 
     if (!chatSnapshot.exists) {
@@ -37,12 +35,11 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Get sender's data
     const senderDoc = await adminDb.collection('users').doc(userId).get()
     const senderName = senderDoc.data()?.fullname || 'User'
     const senderRoles = senderDoc.data()?.roles || {}
+    const isCreator = senderRoles.isCreator || false
 
-    // Create message
     const messageRef = adminDb
       .collection('chats')
       .doc(chatId)
@@ -51,17 +48,16 @@ export async function POST(req: NextRequest) {
 
     const batch = adminDb.batch()
 
-    // Add message with sender details
     batch.set(messageRef, {
       senderId: userId,
       senderName: senderName,
       text: text.trim(),
       createdAt: Timestamp.now(),
       isSystemAdmin: senderRoles.isAdmin || false,
-      isCreator: senderRoles.isCreator || false,
+      isCreator,
+      isAI: false,
     })
 
-    // Update chat's last message with sender name
     batch.update(adminDb.collection('chats').doc(chatId), {
       lastMessage: text.trim(),
       lastMessageTime: Timestamp.now(),
@@ -70,6 +66,22 @@ export async function POST(req: NextRequest) {
     })
 
     await batch.commit()
+
+    // Fire AI reply for buyer messages (non-blocking)
+    // Only trigger if the sender is NOT the creator and NOT an admin
+    if (!isCreator && !senderRoles.isAdmin) {
+      const aiEnabled = chatData?.aiEnabled ?? false
+      const humanTookOver = chatData?.humanTookOver ?? false
+
+      if (aiEnabled && !humanTookOver) {
+        // Fire and forget — don't await so buyer gets instant ack
+        fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/chat/ai-reply`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chatId, buyerMessage: text.trim() }),
+        }).catch((err) => console.error('AI reply trigger failed:', err))
+      }
+    }
 
     return NextResponse.json(
       {

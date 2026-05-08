@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useTransition } from 'react'
 import { Search, Hash, AlertCircle, Loader2, RotateCcw } from 'lucide-react'
 import { ReferenceCard, ReferenceData } from './components/ReferenceCard'
-import { DeleteDialog }                 from './components/DeleteDialog'
+import { DeleteDialog } from './components/DeleteDialog'
 
 type SearchState = 'idle' | 'loading' | 'found' | 'not_found' | 'error'
 
@@ -57,6 +57,20 @@ export default function ReferencesPage() {
     })
     if (!res.ok) throw new Error('Failed to confirm value')
     // Refresh the reference
+    await doSearch(reference.refId ?? reference.id)
+  }, [reference, doSearch])
+
+  // ── Flag transaction ──────────────────────────────────────────────────────────
+
+  const handleFlagTransaction = useCallback(async () => {
+    if (!reference) return
+    const res = await fetch('/api/admin/reference', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ refId: reference.refId ?? reference.id }),
+    })
+    if (!res.ok) throw new Error('Failed to update flag')
+    // Refresh to get latest state
     await doSearch(reference.refId ?? reference.id)
   }, [reference, doSearch])
 
@@ -195,6 +209,7 @@ export default function ReferencesPage() {
         <ReferenceCard
           data={reference}
           onConfirmValue={handleConfirmValue}
+          onFlagTransaction={handleFlagTransaction}
           onDelete={() => setShowDelete(true)}
         />
       )}

@@ -6,16 +6,16 @@ export interface AnalyticsDoc {
   id:                  string
   usersSignedUp:       number
   totalWithdrawn:      number
-  totalEscrow:         number
-  totalEscrowPayments: number
+  totalPaid:           number
+  totalPaidCount:      number
   productsCreated:     number
   totalPlatformFee:    number  // platform fee earned in this period
   updatedAt:           { seconds: number; nanoseconds: number } | null
 }
 
 export interface GlobalDoc {
-  totalEscrow:       number  // all-time escrow paid in (₦)
-  totalPlatformFee:  number  // all-time platform fee earned (₦)
+  totalPaid:       number  // all-time escrow paid in 
+  totalPlatformFee:  number  // all-time platform fee earned
   totalTransactions: number  // all-time transaction count
   updatedAt:         { seconds: number; nanoseconds: number } | null
 }
@@ -28,7 +28,7 @@ export interface AnalyticsData {
 }
 
 const DEFAULT_GLOBAL: GlobalDoc = {
-  totalEscrow:       0,
+  totalPaid:       0,
   totalPlatformFee:  0,
   totalTransactions: 0,
   updatedAt:         null,

@@ -35,7 +35,7 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/_next') ||
     pathname.startsWith('/static') ||
     pathname === '/banned' ||
-    pathname === '/creator/banned'||
+    pathname === '/creator/banned' ||
     pathname === '/admin/not-admin'
   ) {
     return NextResponse.next()
@@ -49,6 +49,19 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/chat') ||
     pathname.startsWith('/dashboard')
 
+  // ── Sync __isCreator cookie for any page that has a session token
+  // This lets the BuyerNav read isCreator without a client-side Firestore call
+  if (authToken && !isProtectedRoute) {
+    const userData = await getUserData(authToken)
+    const response = NextResponse.next()
+    response.cookies.set('__isCreator', String(userData?.roles.isCreator ?? false), {
+      httpOnly: false,   // must be readable by client JS
+      sameSite: 'lax',
+      path: '/',
+    })
+    return response
+  }
+
   if (isProtectedRoute) {
     // No token → redirect to login with return path
     if (!authToken) {
@@ -60,13 +73,17 @@ export async function proxy(request: NextRequest) {
     const userData = await getUserData(authToken)
 
     if (!userData) {
-      // Invalid/expired token — clear cookie and send to login
+      // Invalid/expired token — clear cookies and send to login
       const response = NextResponse.redirect(
         new URL(`/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)
       )
       response.cookies.delete('__session')
+      response.cookies.delete('__isCreator')
       return response
     }
+
+    // Set __isCreator cookie on every protected page response too
+    const isCreatorValue = String(userData.roles.isCreator)
 
     // Global ban applies to every protected route — check first
     if (userData.restrictions.isBanned) {
@@ -75,28 +92,24 @@ export async function proxy(request: NextRequest) {
 
     // ── /creator/* ──────────────────────────────────────────────────────────
     if (pathname.startsWith('/creator')) {
-      // /creator/not-creator is only for authenticated non-creators.
-      // Creators should never land here — redirect them into the creator area.
       if (pathname === '/creator/not-creator') {
         if (userData.roles.isCreator) {
           return NextResponse.redirect(new URL('/creator', request.url))
         }
-        // Non-creator viewing the "not a creator" page — allow
         return NextResponse.next()
       }
 
-      // Creator-banned users can only see /creator/banned
       if (userData.restrictions.isCreatorBanned) {
         return NextResponse.redirect(new URL('/creator/banned', request.url))
       }
 
-      // Non-creators trying to access any other /creator/* route
       if (!userData.roles.isCreator) {
         return NextResponse.redirect(new URL('/creator/not-creator', request.url))
       }
 
-      // Verified creator, not banned — allow
-      return NextResponse.next()
+      const res = NextResponse.next()
+      res.cookies.set('__isCreator', isCreatorValue, { httpOnly: false, sameSite: 'lax', path: '/' })
+      return res
     }
 
     // ── /admin/* ────────────────────────────────────────────────────────────
@@ -104,16 +117,23 @@ export async function proxy(request: NextRequest) {
       if (!userData.roles.isAdmin) {
         return NextResponse.redirect(new URL('/admin/not-admin', request.url))
       }
-      return NextResponse.next()
+      const res = NextResponse.next()
+      res.cookies.set('__isCreator', isCreatorValue, { httpOnly: false, sameSite: 'lax', path: '/' })
+      return res
     }
 
     // ── /chat/* and other protected routes ──────────────────────────────────
-    // Global ban already handled above — if we reach here the user is not banned
-    return NextResponse.next()
+    const res = NextResponse.next()
+    res.cookies.set('__isCreator', isCreatorValue, { httpOnly: false, sameSite: 'lax', path: '/' })
+    return res
   }
 
-  // Public route
-  return NextResponse.next()
+  // Public route — no session, clear stale __isCreator if present
+  const response = NextResponse.next()
+  if (request.cookies.get('__isCreator')) {
+    response.cookies.delete('__isCreator')
+  }
+  return response
 }
 
 export const config = {

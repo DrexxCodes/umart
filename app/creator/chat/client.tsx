@@ -19,42 +19,31 @@ export function CreatorChatClient() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    console.log('CreatorChatClient: Setting up auth listener')
-    
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      console.log('CreatorChatClient: Auth state changed', { 
-        isLoggedIn: !!user, 
-        userId: user?.uid 
-      })
-      
-      if (user) {
-        setIsAuthenticated(true)
-        setError(null)
-      } else {
-        console.log('CreatorChatClient: No user, redirecting to login')
-        router.push('/auth/login')
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (user) => {
+        if (user) {
+          setIsAuthenticated(true)
+          setError(null)
+        } else {
+          router.push('/auth/login')
+        }
+        setLoading(false)
+      },
+      (err) => {
+        setError(err.message)
+        setLoading(false)
       }
-      setLoading(false)
-    }, (err) => {
-      console.error('CreatorChatClient: Auth error', err)
-      setError(err.message)
-      setLoading(false)
-    })
-
-    return () => {
-      console.log('CreatorChatClient: Cleaning up')
-      unsubscribe()
-    }
+    )
+    return () => unsubscribe()
   }, [router])
 
   const handleSelectChat = (chatId: string) => {
-    console.log('CreatorChatClient: Chat selected', chatId)
     setSelectedChatId(chatId)
     setShowChatListMobile(false)
   }
 
   const handleBackToList = () => {
-    console.log('CreatorChatClient: Back to list')
     setShowChatListMobile(true)
     setSelectedChatId(undefined)
   }
@@ -79,11 +68,7 @@ export function CreatorChatClient() {
             <div>
               <h3 className="font-semibold text-destructive mb-1">Error Loading Chat</h3>
               <p className="text-sm text-muted-foreground">{error}</p>
-              <Button 
-                onClick={() => window.location.reload()} 
-                className="mt-4"
-                size="sm"
-              >
+              <Button onClick={() => window.location.reload()} className="mt-4" size="sm">
                 Reload Page
               </Button>
             </div>
@@ -117,18 +102,14 @@ export function CreatorChatClient() {
         ) : (
           <div className="h-full flex flex-col">
             <div className="p-4 border-b border-border bg-card flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleBackToList}
-                className="p-0 h-auto"
-              >
+              <Button variant="ghost" size="sm" onClick={handleBackToList} className="p-0 h-auto">
                 <ChevronLeft className="w-5 h-5" />
               </Button>
               <h2 className="font-bold flex-1">Chat</h2>
             </div>
             <div className="flex-1 flex flex-col overflow-hidden">
-              <ChatArea chatId={selectedChatId} />
+              {/* showTakeoverButton=true so creators see the AI takeover banner */}
+              <ChatArea chatId={selectedChatId} showTakeoverButton />
             </div>
           </div>
         )}
@@ -136,17 +117,15 @@ export function CreatorChatClient() {
 
       {/* Desktop View */}
       <div className="hidden md:flex h-full gap-4 p-4 max-w-7xl mx-auto">
-        {/* Chat List */}
         <div className="w-1/3 border border-border rounded-lg p-4 bg-card flex flex-col overflow-hidden">
           <h2 className="font-bold mb-4">Conversations</h2>
           <div className="flex-1 overflow-y-auto">
             <ChatList selectedChatId={selectedChatId} onSelectChat={handleSelectChat} />
           </div>
         </div>
-
-        {/* Chat Area */}
         <div className="w-2/3 border border-border rounded-lg bg-card flex flex-col overflow-hidden">
-          <ChatArea chatId={selectedChatId} />
+          {/* showTakeoverButton=true for creator-side chat */}
+          <ChatArea chatId={selectedChatId} showTakeoverButton />
         </div>
       </div>
     </div>

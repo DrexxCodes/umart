@@ -32,15 +32,15 @@ interface AnalyticsDoc {
   id:                  string
   usersSignedUp:       number
   totalWithdrawn:      number
-  totalEscrow:         number
-  totalEscrowPayments: number
+  totalPaid:           number
+  totalPaidCount:      number
   productsCreated:     number
   totalPlatformFee:    number  // platform fee earned in this period
   updatedAt:           FirebaseFirestore.Timestamp | null
 }
 
 interface GlobalDoc {
-  totalEscrow:       number  // all-time escrow paid in
+  totalPaid:         number  // all-time escrow paid in
   totalPlatformFee:  number  // all-time platform fee earned
   totalTransactions: number  // all-time transaction count
   updatedAt:         FirebaseFirestore.Timestamp | null
@@ -60,8 +60,8 @@ async function fetchDocs(collection: 'daily' | 'monthly' | 'yearly', ids: string
     id:                  ids[i],
     usersSignedUp:       snap.data()?.usersSignedUp       ?? 0,
     totalWithdrawn:      snap.data()?.totalWithdrawn      ?? 0,
-    totalEscrow:         snap.data()?.totalEscrow         ?? 0,
-    totalEscrowPayments: snap.data()?.totalEscrowPayments ?? 0,
+    totalPaid:           snap.data()?.totalPaid           ?? 0,
+    totalPaidCount:      snap.data()?.totalPaidCount      ?? 0,
     productsCreated:     snap.data()?.productsCreated     ?? 0,
     totalPlatformFee:    snap.data()?.totalPlatformFee    ?? 0,
     updatedAt:           snap.data()?.updatedAt           ?? null,
@@ -71,7 +71,7 @@ async function fetchDocs(collection: 'daily' | 'monthly' | 'yearly', ids: string
 async function fetchGlobal(): Promise<GlobalDoc> {
   const snap = await adminDb.collection('admin').doc('global').get()
   return {
-    totalEscrow:       snap.data()?.totalEscrow       ?? 0,
+    totalPaid:       snap.data()?.totalPaid       ?? 0,
     totalPlatformFee:  snap.data()?.totalPlatformFee  ?? 0,
     totalTransactions: snap.data()?.totalTransactions ?? 0,
     updatedAt:         snap.data()?.updatedAt         ?? null,

@@ -2,13 +2,21 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { getAuth, onAuthStateChanged } from 'firebase/auth'
+import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Edit, ToggleRight, ToggleLeft } from 'lucide-react'
+import { Loader2, Edit, ToggleRight, ToggleLeft, Bot, BotOff } from 'lucide-react'
+
+interface AIConfig {
+  enabled: boolean
+  tone: string
+  priceFloor: number
+  faqs: { question: string; answer: string }[]
+  customContext: string
+}
 
 interface Product {
   id: string
@@ -19,6 +27,7 @@ interface Product {
   status: 'active' | 'inactive'
   images: string[]
   createdAt: any
+  aiConfig?: AIConfig
 }
 
 export function MyProductsClient() {
@@ -36,7 +45,6 @@ export function MyProductsClient() {
         router.push('/auth/login')
       }
     })
-
     return () => unsubscribe()
   }, [router])
 
@@ -45,19 +53,12 @@ export function MyProductsClient() {
       setLoading(true)
       setError('')
       const user = auth.currentUser
-
-      if (!user) {
-        router.push('/auth/login')
-        return
-      }
+      if (!user) { router.push('/auth/login'); return }
 
       const token = await user.getIdToken()
       const response = await fetch('/api/creator/product', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       })
-
       const result = await response.json()
 
       if (result.success) {
@@ -76,11 +77,7 @@ export function MyProductsClient() {
     try {
       setUpdatingId(productId)
       const user = auth.currentUser
-
-      if (!user) {
-        router.push('/auth/login')
-        return
-      }
+      if (!user) { router.push('/auth/login'); return }
 
       const token = await user.getIdToken()
       const newStatus = currentStatus === 'active' ? 'inactive' : 'active'
@@ -95,7 +92,6 @@ export function MyProductsClient() {
       })
 
       const result = await response.json()
-
       if (result.success) {
         setProducts((prev) =>
           prev.map((p) =>
@@ -132,23 +128,19 @@ export function MyProductsClient() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold">My Products</h1>
-            <p className="text-muted-foreground mt-2">
-              Manage your product listings
-            </p>
+            <p className="text-muted-foreground mt-2">Manage your product listings</p>
           </div>
           <Link href="/creator/product/create">
             <Button>Create New Product</Button>
           </Link>
         </div>
 
-        {/* Error Alert */}
         {error && (
           <Card className="border-destructive/50 bg-destructive/5 p-4">
             <p className="text-sm text-destructive">{error}</p>
           </Card>
         )}
 
-        {/* Products Grid */}
         {products.length === 0 ? (
           <Card className="text-center py-12">
             <CardContent className="space-y-4">
@@ -162,86 +154,97 @@ export function MyProductsClient() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {products.map((product) => (
-              <Card key={product.id} className="overflow-hidden hover:shadow-lg transition-shadow">
-                {/* Product Image */}
-                {product.images.length > 0 && (
-                  <div className="relative w-full h-48 bg-muted overflow-hidden">
-                    <img
-                      src={product.images[0] || "/placeholder.svg"}
-                      alt={product.title}
-                      className="w-full h-full object-cover"
-                    />
-                    <Badge
-                      className={`absolute top-2 right-2 ${
-                        product.status === 'active'
-                          ? 'bg-green-600 hover:bg-green-700'
-                          : 'bg-gray-600 hover:bg-gray-700'
-                      }`}
-                    >
-                      {product.status}
-                    </Badge>
-                  </div>
-                )}
+            {products.map((product) => {
+              const claraOn = product.aiConfig?.enabled === true
+              return (
+                <Card key={product.id} className="overflow-hidden hover:shadow-lg transition-shadow">
+                  {/* Product Image */}
+                  {product.images.length > 0 && (
+                    <div className="relative w-full h-48 bg-muted overflow-hidden">
+                      <img
+                        src={product.images[0] || '/placeholder.svg'}
+                        alt={product.title}
+                        className="w-full h-full object-cover"
+                      />
+                      <Badge
+                        className={`absolute top-2 right-2 ${
+                          product.status === 'active'
+                            ? 'bg-green-600 hover:bg-green-700'
+                            : 'bg-gray-600 hover:bg-gray-700'
+                        }`}
+                      >
+                        {product.status}
+                      </Badge>
+                    </div>
+                  )}
 
-                <CardHeader>
-                  <CardTitle className="text-lg line-clamp-2">
-                    {product.title}
-                  </CardTitle>
-                </CardHeader>
+                  <CardHeader>
+                    <CardTitle className="text-lg line-clamp-2">{product.title}</CardTitle>
+                  </CardHeader>
 
-                <CardContent className="space-y-4">
-                  {/* Product Info */}
-                  <div className="space-y-2">
-                    <p className="text-2xl font-bold text-primary">
-                      ₦{product.price.toLocaleString()}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {product.location}
-                    </p>
-                  </div>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <p className="text-2xl font-bold text-primary">
+                        ₦{product.price.toLocaleString()}
+                      </p>
+                      <p className="text-sm text-muted-foreground">{product.location}</p>
+                    </div>
 
-                  {/* Actions */}
-                  <div className="flex flex-col gap-2">
-                    <div className="flex gap-2">
-                      <Link href={`/creator/product/my-products/${product.id}`} className="flex-1">
+                    {/* Actions */}
+                    <div className="flex flex-col gap-2">
+                      <div className="flex gap-2">
+                        <Link href={`/creator/product/my-products/${product.id}`} className="flex-1">
+                          <Button variant="outline" size="sm" className="w-full gap-2 bg-transparent">
+                            <Edit className="w-4 h-4" />
+                            Edit
+                          </Button>
+                        </Link>
                         <Button
                           variant="outline"
                           size="sm"
-                          className="w-full gap-2 bg-transparent"
+                          className="flex-1 gap-2 bg-transparent"
+                          onClick={() => toggleProductStatus(product.id, product.status)}
+                          disabled={updatingId === product.id}
                         >
-                          <Edit className="w-4 h-4" />
-                          Edit
-                        </Button>
-                      </Link>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full gap-2 bg-transparent"
-                        onClick={() => toggleProductStatus(product.id, product.status)}
-                        disabled={updatingId === product.id}
-                      >
-                        {updatingId === product.id ? (
-                          <>
+                          {updatingId === product.id ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
-                          </>
-                        ) : product.status === 'active' ? (
-                          <>
-                            <ToggleRight className="w-4 h-4" />
-                            Deactivate
-                          </>
+                          ) : product.status === 'active' ? (
+                            <>
+                              <ToggleRight className="w-4 h-4" />
+                              Deactivate
+                            </>
+                          ) : (
+                            <>
+                              <ToggleLeft className="w-4 h-4" />
+                              Activate
+                            </>
+                          )}
+                        </Button>
+                      </div>
+
+                      {/* Clara indicator */}
+                      <div
+                        title={claraOn ? 'Clara will sell for you' : 'Clara is not going to sell this product'}
+                        className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-colors cursor-default select-none ${
+                          claraOn
+                            ? 'bg-primary/10 text-primary'
+                            : 'bg-muted/50 text-muted-foreground'
+                        }`}
+                      >
+                        {claraOn ? (
+                          <Bot className="w-4 h-4 flex-shrink-0" />
                         ) : (
-                          <>
-                            <ToggleLeft className="w-4 h-4" />
-                            Activate
-                          </>
+                          <BotOff className="w-4 h-4 flex-shrink-0" />
                         )}
-                      </Button>
+                        <span>
+                          {claraOn ? 'Clara is selling this' : 'Clara is off'}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
         )}
       </div>

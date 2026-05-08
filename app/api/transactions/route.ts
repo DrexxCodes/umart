@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { rateLimit, getClientIp } from '@/lib/rate-limit'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
 
 type TransactionType = 'purchase' | 'sale'
@@ -9,26 +10,23 @@ interface TransactionRef {
 }
 
 export async function GET(req: NextRequest) {
+  const ip = getClientIp(req)
+  const rl = rateLimit(`transactions:${ip}`, { limit: 60, windowSeconds: 60 })
+  if (!rl.success) {
+    return NextResponse.json({ success: false, error: 'Too many requests.' }, { status: 429 })
+  }
   try {
-    // ── Auth ──────────────────────────────────────────────────────────────────
     const authHeader = req.headers.get('authorization')
     if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      )
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
     const token = authHeader.substring(7)
     let decodedToken
-
     try {
       decodedToken = await adminAuth.verifyIdToken(token)
     } catch {
-      return NextResponse.json(
-        { success: false, error: 'Invalid or expired token' },
-        { status: 401 }
-      )
+      return NextResponse.json({ success: false, error: 'Invalid or expired token' }, { status: 401 })
     }
 
     const userId = decodedToken.uid
@@ -43,31 +41,21 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    // ── Single transaction lookup: ?type=purchase&refId=xxx ──────────────────
+    // ── Single transaction lookup ─────────────────────────────────────────────
     if (refId) {
       const refDoc = await adminDb.collection('references').doc(refId).get()
 
       if (!refDoc.exists) {
-        return NextResponse.json(
-          { success: false, error: 'Transaction not found' },
-          { status: 404 }
-        )
+        return NextResponse.json({ success: false, error: 'Transaction not found' }, { status: 404 })
       }
 
       const d = refDoc.data()!
 
-      // Access control: verify user is the correct party for the requested type
       if (type === 'purchase' && d.buyerId !== userId) {
-        return NextResponse.json(
-          { success: false, error: 'Transaction not found' },
-          { status: 404 }
-        )
+        return NextResponse.json({ success: false, error: 'Transaction not found' }, { status: 404 })
       }
       if (type === 'sale' && d.sellerId !== userId) {
-        return NextResponse.json(
-          { success: false, error: 'Transaction not found' },
-          { status: 404 }
-        )
+        return NextResponse.json({ success: false, error: 'Transaction not found' }, { status: 404 })
       }
 
       return NextResponse.json(
@@ -89,6 +77,7 @@ export async function GET(req: NextRequest) {
             status: d.status ?? null,
             valueReceived: d.valueReceived ?? false,
             withdrawn: d.withdrawn ?? false,
+            confirmedValue: d.confirmedValue ?? false,
             createdAt: d.createdAt,
             updatedAt: d.updatedAt,
           },
@@ -97,14 +86,11 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    // ── All transactions for user: ?type=purchase ─────────────────────────────
+    // ── All transactions for user ─────────────────────────────────────────────
     const userDoc = await adminDb.collection('users').doc(userId).get()
 
     if (!userDoc.exists) {
-      return NextResponse.json(
-        { success: false, error: 'User not found' },
-        { status: 404 }
-      )
+      return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
     }
 
     const userData = userDoc.data()!
@@ -128,6 +114,13 @@ export async function GET(req: NextRequest) {
         const d = doc.data()!
         if (type === 'sale' && d.sellerId !== userId) return null
         if (type === 'purchase' && d.buyerId !== userId) return null
+
+        // Buyer sees: paid, disputing — but not pending/failed on this filtered view
+        // Sale view: show all statuses (seller needs to see pending too)
+        if (type === 'purchase') {
+          if (d.status !== 'paid' && d.status !== 'disputing') return null
+        }
+
         return {
           refId: d.refId,
           type,
@@ -140,6 +133,7 @@ export async function GET(req: NextRequest) {
           status: d.status ?? null,
           valueReceived: d.valueReceived ?? false,
           withdrawn: d.withdrawn ?? false,
+          confirmedValue: d.confirmedValue ?? false,
         }
       })
       .filter(Boolean)

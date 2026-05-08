@@ -4,7 +4,7 @@ import { useState } from 'react'
 import {
   CheckCircle2, XCircle, Clock, Package, User, ShoppingCart,
   Banknote, Receipt, Truck, Trash2, ShieldCheck,
-  ChevronDown, ChevronUp, ArrowDownToLine,
+  ChevronDown, ChevronUp, ArrowDownToLine, Flag,
 } from 'lucide-react'
 
 export interface ReferenceData {
@@ -27,14 +27,18 @@ export interface ReferenceData {
   valueReceivedAt?:     string | null
   valueReceivedByAdmin?: string | null
   withdrawn:            boolean
+  flagged:              boolean
+  flaggedAt?:           string | null
+  flaggedByAdmin?:      string | null
   createdAt:            string
   updatedAt:            string
 }
 
 interface ReferenceCardProps {
-  data:           ReferenceData
-  onConfirmValue: () => Promise<void>
-  onDelete:       () => void
+  data:               ReferenceData
+  onConfirmValue:     () => Promise<void>
+  onFlagTransaction:  () => Promise<void>
+  onDelete:           () => void
 }
 
 function fmt(n: number) {
@@ -88,13 +92,19 @@ function Section({ icon: Icon, title, children }: { icon: React.ElementType; tit
   )
 }
 
-export function ReferenceCard({ data, onConfirmValue, onDelete }: ReferenceCardProps) {
+export function ReferenceCard({ data, onConfirmValue, onFlagTransaction, onDelete }: ReferenceCardProps) {
   const [confirmingValue, setConfirmingValue] = useState(false)
+  const [flagging,        setFlagging]        = useState(false)
   const [itemsExpanded,   setItemsExpanded]   = useState(true)
 
   const handleConfirmValue = async () => {
     setConfirmingValue(true)
     try { await onConfirmValue() } finally { setConfirmingValue(false) }
+  }
+
+  const handleFlagTransaction = async () => {
+    setFlagging(true)
+    try { await onFlagTransaction() } finally { setFlagging(false) }
   }
 
   return (
@@ -118,13 +128,16 @@ export function ReferenceCard({ data, onConfirmValue, onDelete }: ReferenceCardP
       </div>
 
       {/* Status flags */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         {[
           { icon: Banknote,       label: 'Payment',        content: <BoolPill value={data.status==='paid'} trueLabel="Paid" falseLabel="Awaiting payment"/> },
           { icon: CheckCircle2,   label: 'Value Confirmed', content: data.valueReceived
               ? <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="w-3.5 h-3.5"/>Confirmed{data.valueReceivedAt ? ` · ${fmtDate(data.valueReceivedAt)}` : ''}</span>
               : <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground"><Clock className="w-3.5 h-3.5"/>Not yet confirmed</span> },
           { icon: ArrowDownToLine, label: 'Withdrawal',    content: <BoolPill value={data.withdrawn} trueLabel="Withdrawn" falseLabel="Not withdrawn"/> },
+          { icon: Flag, label: 'Flagged', content: data.flagged
+              ? <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400"><Flag className="w-3.5 h-3.5" fill="currentColor"/>Flagged{data.flaggedAt ? ` · ${fmtDate(data.flaggedAt)}` : ''}</span>
+              : <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground"><Flag className="w-3.5 h-3.5"/>Not flagged</span> },
         ].map(({ icon: Icon, label, content }) => (
           <div key={label} className="rounded-lg border border-border bg-card px-3.5 py-3 flex items-center gap-3">
             <div className="w-7 h-7 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
@@ -226,6 +239,30 @@ export function ReferenceCard({ data, onConfirmValue, onDelete }: ReferenceCardP
               </p>
             </div>
           )}
+
+          {/* Flag transaction */}
+          <div className="flex items-center justify-between gap-4 py-2 border border-border rounded-lg px-3">
+            <div>
+              <p className="text-xs font-semibold text-foreground">Flag Transaction</p>
+              <p className="text-[0.65rem] text-muted-foreground mt-0.5">
+                {data.flagged
+                  ? `Flagged${data.flaggedAt ? ` · ${fmtDate(data.flaggedAt)}` : ''} — click to unflag`
+                  : 'Mark this transaction as suspicious or requiring review.'}
+              </p>
+            </div>
+            <button
+              onClick={handleFlagTransaction}
+              disabled={flagging}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
+                data.flagged
+                  ? 'bg-amber-500/20 text-amber-500 border-amber-500/40 hover:bg-amber-500/30'
+                  : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/25 hover:bg-amber-500/20'
+              }`}
+            >
+              <Flag className="w-3.5 h-3.5" fill={data.flagged ? 'currentColor' : 'none'} />
+              {flagging ? 'Updating…' : data.flagged ? 'Unflag' : 'Flag'}
+            </button>
+          </div>
 
           <div className="border-t border-border pt-3 mt-1">
             <button onClick={onDelete}

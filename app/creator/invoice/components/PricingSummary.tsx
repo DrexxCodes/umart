@@ -114,7 +114,7 @@ export function PricingSummary({
 
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">
-              Platform Fee (5% + ₦200)
+              Platform Fee (5% + ₦300)
               {!buyerBearsBurden && (
                 <span className="ml-1 text-xs text-yellow-600">(deducted from your payout)</span>
               )}
