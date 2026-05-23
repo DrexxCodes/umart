@@ -13,7 +13,7 @@
 
 const DASHBOARD_KEY = 'creator:dashboard'
 const USERNAME_KEY  = 'creator:username'
-const TTL_MS        = 10 * 60 * 1000   // 10 minutes
+const TTL_MS = 30 * 1000   // 30 seconds
 
 interface CacheEntry<T> {
   data: T
@@ -47,7 +47,7 @@ function safeRemove(storage: Storage, key: string): void {
   } catch { /* ignore */ }
 }
 
-// ── Dashboard cache (localStorage, 10-min TTL) ────────────────────────────────
+// ── Dashboard cache (localStorage, 30s TTL) ────────────────────────────────
 
 export function getDashboardCache<T>(): T | null {
   if (typeof window === 'undefined') return null

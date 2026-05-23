@@ -29,7 +29,7 @@ export default function NotCreatorClient() {
               <Link href="/">Go Home</Link>
             </Button>
             <Button asChild variant="outline" className="flex-1 bg-transparent">
-              <Link href="/creator/apply">Become a Creator</Link>
+              <Link href="/seller/upgrade">Become a Creator</Link>
             </Button>
           </div>
         </CardContent>
