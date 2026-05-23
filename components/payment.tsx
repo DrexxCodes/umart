@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { PaystackResponse } from '@/types/global'
+import { CREDO_PUBLIC_KEY } from '@/lib/credo'
+import type { CredoResponse } from '@/types/global'
 
 export interface PaymentButtonProps {
   refId: string
@@ -21,7 +22,7 @@ export interface PaymentButtonProps {
   onMounting?: () => void  // fires just before openIframe()
 }
 
-const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || ''
+type LoadingState = 'idle' | 'starting' | 'open'
 
 export function PaymentButton({
   refId,
@@ -37,49 +38,69 @@ export function PaymentButton({
   onMounting,
 }: PaymentButtonProps) {
   const router = useRouter()
-  const [loading, setLoading] = useState(false)
+  const [loadingState, setLoadingState] = useState<LoadingState>('idle')
+
+  const isLoading = loadingState !== 'idle'
+
+  const loadingLabel =
+    loadingState === 'starting' ? 'Starting Transaction...' : 'Opening payment...'
 
   const handlePay = () => {
-    setLoading(true)
+    setLoadingState('starting')
 
-    if (typeof window.PaystackPop !== 'undefined') {
-      initPaystack()
+    // If CredoWidget is already on the window object, open directly
+    if (typeof window.CredoWidget !== 'undefined') {
+      initCredo()
+      return
+    }
+
+    // If the script tag is already in the DOM but CredoWidget isn't ready yet
+    // (e.g. second click while script is still loading), poll until it's ready
+    if (document.getElementById('credo-inline')) {
+      const interval = setInterval(() => {
+        if (typeof window.CredoWidget !== 'undefined') {
+          clearInterval(interval)
+          initCredo()
+        }
+      }, 100)
       return
     }
 
     const script = document.createElement('script')
-    script.id = 'paystack-inline'
-    script.src = 'https://js.paystack.co/v1/inline.js'
-    script.onload = () => initPaystack()
+    script.id = 'credo-inline'
+    script.src = 'https://pay.credocentral.com/inline.js'  // correct CDN URL
+    script.onload = () => initCredo()
     script.onerror = () => {
       toast.error('Failed to load payment provider. Please try again.')
-      setLoading(false)
+      setLoadingState('idle')
     }
     document.body.appendChild(script)
   }
 
-  const initPaystack = () => {
-    if (typeof window.PaystackPop === 'undefined') {
+  const initCredo = () => {
+    if (typeof window.CredoWidget === 'undefined') {
       toast.error('Payment provider unavailable. Please refresh and try again.')
-      setLoading(false)
+      setLoadingState('idle')
       return
     }
 
-    const handler = window.PaystackPop.setup({
-      key: PAYSTACK_PUBLIC_KEY,
-      email: buyerEmail,
-      amount: grandPrice * 100,
-      currency: 'NGN',
-      ref: refId,
-      metadata: {
-        custom_fields: [
-          { display_name: 'Name', variable_name: 'name', value: buyerName },
-          { display_name: 'Phone', variable_name: 'phone', value: buyerPhone || '' },
-        ],
-      },
-      callback: (response: PaystackResponse) => {
-        setLoading(false)
-        if (response.status === 'success') {
+    // Split buyerName into first/last as Credo's widget expects separate fields
+    const nameParts = (buyerName || '').trim().split(/\s+/)
+    const customerFirstName = nameParts[0] || ''
+    const customerLastName  = nameParts.slice(1).join(' ') || ''
+
+    const handler = window.CredoWidget.setup({
+      key:                 CREDO_PUBLIC_KEY,
+      email:               buyerEmail,
+      amount:              grandPrice * 100,  // kobo
+      currency:            'NGN',
+      reference:           refId,
+      customerFirstName,
+      customerLastName,
+      customerPhoneNumber: buyerPhone || '',
+      onSuccess: (response: CredoResponse) => {
+        setLoadingState('idle')
+        if (response.status === 'APPROVED') {
           toast.success('Payment successful! Redirecting...')
           onSuccess?.()
           router.push(`/success?refId=${response.reference}`)
@@ -88,28 +109,34 @@ export function PaymentButton({
         }
       },
       onClose: () => {
-        setLoading(false)
+        setLoadingState('idle')
         onClose?.()
       },
     })
 
-    // Fire onMounting BEFORE openIframe so the parent can close the dialog
-    // before the Paystack overlay renders on top
+    // Fire onMounting BEFORE openIframe so the parent can close any dialog.
+    // Then defer openIframe by one tick — React's state update from onMounting
+    // (e.g. setPayDialogOpen(false)) must be committed to the DOM before Credo
+    // mounts its overlay, otherwise the iframe either gets clipped by the dialog
+    // or gets torn down when React removes the dialog in the same paint cycle.
     onMounting?.()
-    handler.openIframe()
+    setLoadingState('open')
+    setTimeout(() => {
+      handler.openIframe()
+    }, 50)
   }
-
+ 
   return (
     <Button
       onClick={handlePay}
-      disabled={disabled || loading}
+      disabled={disabled || isLoading}
       className={className}
       size="lg"
     >
-      {loading ? (
+      {isLoading ? (
         <>
           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-          Opening payment...
+          {loadingLabel}
         </>
       ) : (
         label

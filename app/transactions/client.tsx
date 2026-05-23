@@ -535,8 +535,8 @@ export function TransactionsClient() {
                 <AlertDialogDescription asChild>
                   <div className="space-y-2">
                     <p className="text-sm text-muted-foreground">
-                      You closed the payment popup without completing payment.
-                      Your order is still saved — you can pay anytime from your transactions.
+                      Looks like you closed the payment popup without completing payment.
+                      Your order is still saved, you can pay anytime from your transactions.
                     </p>
                   </div>
                 </AlertDialogDescription>

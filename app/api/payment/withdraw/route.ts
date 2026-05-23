@@ -29,10 +29,10 @@ export async function GET(req: NextRequest) {
         .get()
       const accounts = snap.docs.map((d) => ({
         id: d.id,
-        bankName: d.data().bankName,
-        bankCode: d.data().bankCode,
+        bankName:      d.data().bankName,
+        bankCode:      d.data().bankCode,
         accountNumber: d.data().accountNumber,
-        accountName: d.data().accountName,
+        accountName:   d.data().accountName,
         recipientCode: d.data().recipientCode ?? null,
       }))
       return NextResponse.json({ success: true, data: accounts })
@@ -58,10 +58,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       data: {
-        status: data.status,
-        payoutAmount: data.payoutAmount,
-        pendingAt: data.pendingAt,
-        paidAt: data.paidAt ?? null,
+        status:        data.status,
+        payoutAmount:  data.payoutAmount,
+        pendingAt:     data.pendingAt,
+        paidAt:        data.paidAt ?? null,
       },
     })
   } catch (error: any) {
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing refId' }, { status: 400 })
     }
 
-    // Idempotency
+    // Idempotency — if a payQueue doc already exists, return its current state
     const existingDoc = await adminDb.collection('payQueue').doc(refId).get()
     if (existingDoc.exists) {
       const existing = existingDoc.data()!
@@ -120,26 +120,25 @@ export async function POST(req: NextRequest) {
     }
     const refData = refDoc.data()!
 
-    if (refData.sellerId !== sellerId)  return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    if (refData.status !== 'paid')      return NextResponse.json({ success: false, error: 'Payment has not been completed for this transaction' }, { status: 400 })
-    if (!refData.valueReceived)         return NextResponse.json({ success: false, error: 'Buyer has not confirmed value received yet' }, { status: 400 })
-    if (refData.withdrawn)              return NextResponse.json({ success: false, error: 'Funds have already been withdrawn for this transaction' }, { status: 400 })
-    if (refData.flagged)                return NextResponse.json({ success: false, error: 'This transaction has been flagged and cannot be processed' }, { status: 403 })
+    if (refData.sellerId !== sellerId) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    if (refData.status !== 'paid')     return NextResponse.json({ success: false, error: 'Payment has not been completed for this transaction' }, { status: 400 })
+    if (!refData.valueReceived)        return NextResponse.json({ success: false, error: 'Buyer has not confirmed value received yet' }, { status: 400 })
+    if (refData.withdrawn)             return NextResponse.json({ success: false, error: 'Funds have already been withdrawn for this transaction' }, { status: 400 })
+    if (refData.flagged)               return NextResponse.json({ success: false, error: 'This transaction has been flagged and cannot be processed' }, { status: 403 })
 
     const payoutAmount: number = refData.sellerPayout ?? refData.grandPrice ?? 0
     if (payoutAmount <= 0) {
       return NextResponse.json({ success: false, error: 'Invalid payout amount' }, { status: 400 })
     }
 
-    // Build a human-readable product name for the transfer reason
-    const productName = refData.items?.[0]?.productName ?? 'your order'
+    const productName   = refData.items?.[0]?.productName ?? 'your order'
     const transferReason = `Payment for ${productName}`
 
     // ── Resolve bank account ──────────────────────────────────────────────────
-    let resolvedBankCode = bankCode
-    let resolvedBankName = bankName
+    let resolvedBankCode      = bankCode
+    let resolvedBankName      = bankName
     let resolvedAccountNumber = accountNumber
-    let resolvedAccountName = accountName
+    let resolvedAccountName   = accountName
     let resolvedRecipientCode: string | null = null
     let bankInfoRef: string | null = null
 
@@ -148,13 +147,13 @@ export async function POST(req: NextRequest) {
       if (!savedDoc.exists || savedDoc.data()?.uid !== sellerId) {
         return NextResponse.json({ success: false, error: 'Saved account not found' }, { status: 404 })
       }
-      const saved = savedDoc.data()!
-      resolvedBankCode       = saved.bankCode
-      resolvedBankName       = saved.bankName
-      resolvedAccountNumber  = saved.accountNumber
-      resolvedAccountName    = saved.accountName
-      resolvedRecipientCode  = saved.recipientCode ?? null
-      bankInfoRef            = savedAccountId
+      const saved           = savedDoc.data()!
+      resolvedBankCode      = saved.bankCode
+      resolvedBankName      = saved.bankName
+      resolvedAccountNumber = saved.accountNumber
+      resolvedAccountName   = saved.accountName
+      resolvedRecipientCode = saved.recipientCode ?? null
+      bankInfoRef           = savedAccountId
     } else {
       if (!bankCode || !bankName || !accountNumber || !accountName) {
         return NextResponse.json(
@@ -180,9 +179,9 @@ export async function POST(req: NextRequest) {
 
     if (!resolvedRecipientCode) {
       const recipient = await createRecipient({
-        name: resolvedAccountName,
+        name:          resolvedAccountName,
         accountNumber: resolvedAccountNumber,
-        bankCode: resolvedBankCode,
+        bankCode:      resolvedBankCode,
       })
       resolvedRecipientCode = recipient.recipient_code
       if (bankInfoRef) {
@@ -193,56 +192,56 @@ export async function POST(req: NextRequest) {
     const transferRef = `withdraw-${refId}-${Date.now()}`
     const transfer = await initiateTransfer({
       recipientCode: resolvedRecipientCode,
-      amount: payoutAmount * 100,
-      reference: transferRef,
-      reason: transferReason,
+      amount:        payoutAmount * 100,
+      reference:     transferRef,
+      reason:        transferReason,
     })
 
+    // ── Atomic batch: create payQueue + mark reference as withdrawn ───────────
+    // NOTE: Analytics (totalWithdrawn) are intentionally NOT updated here.
+    // They are updated atomically inside the Paystack transfer.success webhook
+    // handler, ensuring stats only reflect confirmed payouts.
     const batch = adminDb.batch()
+
     batch.set(adminDb.collection('payQueue').doc(refId), {
       refId,
       sellerId,
-      buyerId: refData.buyerId,
+      buyerId:           refData.buyerId,
       payoutAmount,
-      bankCode: resolvedBankCode,
-      bankName: resolvedBankName,
-      accountNumber: resolvedAccountNumber,
-      accountName: resolvedAccountName,
+      bankCode:          resolvedBankCode,
+      bankName:          resolvedBankName,
+      accountNumber:     resolvedAccountNumber,
+      accountName:       resolvedAccountName,
       bankInfoRef,
-      recipientCode: resolvedRecipientCode,
-      transferCode: transfer.transfer_code,
-      transferStatus: transfer.status,
-      reason: transferReason,
-      status: 'pending',
-      pendingAt: FieldValue.serverTimestamp(),
-      paidAt: null,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
+      recipientCode:     resolvedRecipientCode,
+      transferCode:      transfer.transfer_code,
+      transferStatus:    transfer.status,
+      reason:            transferReason,
+      status:            'pending',
+      pendingAt:         FieldValue.serverTimestamp(),
+      paidAt:            null,
+      createdAt:         FieldValue.serverTimestamp(),
+      updatedAt:         FieldValue.serverTimestamp(),
     })
+
     batch.update(adminDb.collection('references').doc(refId), {
-      withdrawn: true,
-      updatedAt: FieldValue.serverTimestamp(),
+      withdrawn:  true,
+      updatedAt:  FieldValue.serverTimestamp(),
     })
+
     await batch.commit()
 
-    // Non-blocking analytics
-    try {
-      const nigerianTime = new Date(Date.now() + 60 * 60 * 1000)
-      const y = nigerianTime.getUTCFullYear().toString()
-      const m = `${y}-${String(nigerianTime.getUTCMonth() + 1).padStart(2, '0')}`
-      const d = `${m}-${String(nigerianTime.getUTCDate()).padStart(2, '0')}`
-      await Promise.all([
-        adminDb.collection('admin').doc('analytics').collection('daily').doc(d)
-          .set({ totalWithdrawn: FieldValue.increment(payoutAmount), updatedAt: FieldValue.serverTimestamp() }, { merge: true }),
-        adminDb.collection('admin').doc('analytics').collection('monthly').doc(m)
-          .set({ totalWithdrawn: FieldValue.increment(payoutAmount), updatedAt: FieldValue.serverTimestamp() }, { merge: true }),
-        adminDb.collection('admin').doc('analytics').collection('yearly').doc(y)
-          .set({ totalWithdrawn: FieldValue.increment(payoutAmount), updatedAt: FieldValue.serverTimestamp() }, { merge: true }),
-      ])
-    } catch (e) { console.error('[withdraw] analytics error:', e) }
-
     return NextResponse.json(
-      { success: true, data: { status: 'pending', payoutAmount, pendingAt: new Date().toISOString(), paidAt: null, transferCode: transfer.transfer_code } },
+      {
+        success: true,
+        data: {
+          status:       'pending',
+          payoutAmount,
+          pendingAt:    new Date().toISOString(),
+          paidAt:       null,
+          transferCode: transfer.transfer_code,
+        },
+      },
       { status: 201 }
     )
   } catch (error: any) {

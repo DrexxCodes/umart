@@ -55,8 +55,14 @@ export default function AdminCategoriesPage() {
 
   const handleUpdated = useCallback((updated: Category) => {
     setCategories((prev) =>
-      prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+      prev
+        .map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+        .sort((a, b) => (a.displayName ?? '').localeCompare(b.displayName ?? ''))
     )
+  }, [])
+
+  const handleDeleted = useCallback((id: string) => {
+    setCategories((prev) => prev.filter((c) => c.id !== id))
   }, [])
 
   const completeness = categories.length
@@ -154,6 +160,7 @@ export default function AdminCategoriesPage() {
               loading={loading}
               token={token}
               onUpdated={handleUpdated}
+              onDeleted={handleDeleted}
             />
           </div>
 

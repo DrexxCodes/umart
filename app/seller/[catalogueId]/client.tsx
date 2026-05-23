@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Loader2, Star, ChevronLeft, ShoppingBag } from 'lucide-react'
+import { Loader2, Star, ChevronLeft, ShoppingBag, MapPin } from 'lucide-react'
 
 interface CatalogueData {
   catalogueId: string
@@ -43,7 +43,7 @@ function StarDisplay({ rating, size = 14 }: { rating: number; size?: number }) {
         <Star
           key={s}
           size={size}
-          className={s <= Math.round(rating) ? 'text-amber-400 fill-amber-400' : 'text-muted-foreground/30'}
+          className={s <= Math.round(rating) ? 'text-amber-400 fill-amber-400' : 'text-muted-foreground/20'}
         />
       ))}
     </div>
@@ -55,10 +55,10 @@ export function SellerCatalogueClient() {
   const router = useRouter()
 
   const [catalogue, setCatalogue] = useState<CatalogueData | null>(null)
-  const [products, setProducts] = useState<Product[]>([])
-  const [reviews, setReviews] = useState<Review[]>([])
-  const [loading, setLoading] = useState(true)
-  const [notFound, setNotFound] = useState(false)
+  const [products,  setProducts]  = useState<Product[]>([])
+  const [reviews,   setReviews]   = useState<Review[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [notFound,  setNotFound]  = useState(false)
 
   useEffect(() => {
     if (!catalogueId) return
@@ -77,8 +77,7 @@ export function SellerCatalogueClient() {
         setCatalogue(catData.data)
         if (revData.success) setReviews(revData.data)
 
-        // Fetch products using the seller's userId
-        const prodRes = await fetch(`/api/catalogue/products?userId=${catData.data.userId}`)
+        const prodRes  = await fetch(`/api/catalogue/products?userId=${catData.data.userId}`)
         const prodData = await prodRes.json()
         if (prodData.success) setProducts(prodData.data)
       } catch {
@@ -100,47 +99,57 @@ export function SellerCatalogueClient() {
   if (notFound || !catalogue) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4">
-        <ShoppingBag size={48} className="text-muted-foreground" />
+        <ShoppingBag size={48} className="text-muted-foreground/40" />
         <p className="text-lg font-semibold">Catalogue not found</p>
         <Button variant="outline" onClick={() => router.push('/')}>Go Home</Button>
       </div>
     )
   }
 
+  const initial = catalogue.username?.[0]?.toUpperCase() ?? '?'
+
   return (
     <div className="min-h-screen bg-background">
-      {/* Back */}
-      <div className="max-w-3xl mx-auto px-4 pt-4">
-        <Button variant="ghost" size="sm" className="-ml-2 mb-2" onClick={() => router.back()}>
+      {/* Back button — sits above cover, not inside it */}
+      <div className="max-w-3xl mx-auto px-4 pt-4 pb-0">
+        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => router.back()}>
           <ChevronLeft size={16} className="mr-1" />Back
         </Button>
       </div>
 
-      {/* Hero */}
-      <div className="relative h-44 bg-muted">
+      {/* ── Cover photo ──────────────────────────────────────────────────── */}
+      <div className="relative h-48 sm:h-56 bg-muted">
         {catalogue.coverPhoto ? (
           <img src={catalogue.coverPhoto} alt="Cover" className="w-full h-full object-cover" />
         ) : (
-          <div className="w-full h-full bg-gradient-to-br from-primary/20 to-primary/5" />
+          <div className="w-full h-full bg-gradient-to-br from-primary/25 via-primary/10 to-background" />
         )}
+        {/* Subtle bottom fade so the cover blends into the white/dark page */}
+        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
       </div>
 
       <div className="max-w-3xl mx-auto px-4">
-        {/* Profile section */}
-        <div className="flex items-end gap-4 -mt-12 mb-4">
-          <div className="w-24 h-24 rounded-full border-4 border-background overflow-hidden bg-muted shrink-0">
-            {catalogue.profilePhoto ? (
-              <img src={catalogue.profilePhoto} alt={catalogue.username} className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-3xl font-bold text-muted-foreground">
-                {catalogue.username?.[0]?.toUpperCase() ?? '?'}
-              </div>
-            )}
+        {/* ── Profile section ─────────────────────────────────────────────── */}
+        {/* Avatar sits ON the cover boundary — pulled up with -mt */}
+        <div className="-mt-14 mb-4 flex items-end gap-4">
+          {/* Avatar */}
+          <div className="relative shrink-0">
+            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full border-4 border-background shadow-lg overflow-hidden bg-muted">
+              {catalogue.profilePhoto ? (
+                <img src={catalogue.profilePhoto} alt={catalogue.username} className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-3xl font-bold text-muted-foreground bg-primary/10">
+                  {initial}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="pb-1">
-            <h1 className="text-xl font-bold">{catalogue.username}</h1>
+
+          {/* Name + rating — aligned to the bottom of the avatar row */}
+          <div className="pb-1 min-w-0">
+            <h1 className="text-xl font-bold truncate">{catalogue.username}</h1>
             {catalogue.reviewsCount > 0 && (
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                 <StarDisplay rating={catalogue.averageReview} />
                 <span className="text-sm font-semibold">{catalogue.averageReview.toFixed(1)}</span>
                 <span className="text-xs text-muted-foreground">({catalogue.reviewsCount} reviews)</span>
@@ -149,15 +158,18 @@ export function SellerCatalogueClient() {
           </div>
         </div>
 
+        {/* Bio */}
         {catalogue.bio && (
-          <p className="text-sm text-muted-foreground mb-6 leading-relaxed">{catalogue.bio}</p>
+          <p className="text-sm text-muted-foreground mb-6 leading-relaxed max-w-xl">
+            {catalogue.bio}
+          </p>
         )}
 
-        {/* Products */}
+        {/* ── Products ──────────────────────────────────────────────────── */}
         <h2 className="text-base font-bold mb-3">Products</h2>
         {products.length === 0 ? (
           <Card className="p-8 text-center mb-8">
-            <ShoppingBag className="mx-auto mb-2 text-muted-foreground" size={32} />
+            <ShoppingBag className="mx-auto mb-2 text-muted-foreground/40" size={32} />
             <p className="text-muted-foreground text-sm">No active products listed yet.</p>
           </Card>
         ) : (
@@ -170,7 +182,7 @@ export function SellerCatalogueClient() {
                       <img src={p.image} alt={p.title} className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
-                        <ShoppingBag size={24} className="text-muted-foreground" />
+                        <ShoppingBag size={24} className="text-muted-foreground/40" />
                       </div>
                     )}
                   </div>
@@ -184,7 +196,7 @@ export function SellerCatalogueClient() {
           </div>
         )}
 
-        {/* Reviews */}
+        {/* ── Reviews ───────────────────────────────────────────────────── */}
         {reviews.length > 0 && (
           <>
             <h2 className="text-base font-bold mb-3">Customer Reviews</h2>

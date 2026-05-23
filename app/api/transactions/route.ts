@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
         // Buyer sees: paid, disputing — but not pending/failed on this filtered view
         // Sale view: show all statuses (seller needs to see pending too)
         if (type === 'purchase') {
-          if (d.status !== 'paid' && d.status !== 'disputing') return null
+          if (!['pending', 'paid', 'disputing', 'failed'].includes(d.status)) return null
         }
 
         return {

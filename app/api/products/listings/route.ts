@@ -58,9 +58,9 @@ export async function GET(request: NextRequest) {
       {
         status: 200,
         headers: {
-          // Tell the CDN/Next.js to cache for 8 days (691200 seconds)
-          // stale-while-revalidate allows serving stale while fetching fresh
-          'Cache-Control': 'public, s-maxage=691200, stale-while-revalidate=86400',
+          // Cache for 2 minutes; serve stale for another 2 minutes while
+          // revalidating in the background (stale-while-revalidate pattern)
+          'Cache-Control': 'public, s-maxage=120, stale-while-revalidate=120',
         },
       }
     )

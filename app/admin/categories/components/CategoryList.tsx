@@ -2,9 +2,8 @@
 
 import { useState } from 'react'
 import {
-  ImageIcon, Tag, Hash, FileText, Calendar,
-  Pencil, CheckCircle, XCircle, ChevronRight,
-  PackageSearch,
+  ImageIcon, Tag, Hash, Pencil, XCircle,
+  PackageSearch, Trash2, Loader2,
 } from 'lucide-react'
 import CategoryForm, { CategoryFormData } from './CategoryForm'
 
@@ -27,6 +26,7 @@ interface CategoryListProps {
   loading: boolean
   token: string
   onUpdated: (updated: Category) => void
+  onDeleted?: (id: string) => void
 }
 
 export default function CategoryList({
@@ -34,12 +34,34 @@ export default function CategoryList({
   loading,
   token,
   onUpdated,
+  onDeleted,
 }: CategoryListProps) {
-  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingId, setEditingId]     = useState<string | null>(null)
+  const [deletingId, setDeletingId]   = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<Record<string, string>>({})
 
   function handleUpdated(data: any) {
     onUpdated(data)
     setEditingId(null)
+  }
+
+  async function handleDelete(cat: Category) {
+    if (!confirm(`Delete category "${cat.displayName}"? This cannot be undone.`)) return
+    setDeletingId(cat.id)
+    setDeleteError((prev) => { const n = { ...prev }; delete n[cat.id]; return n })
+    try {
+      const res  = await fetch(`/api/creator/products/categories/${cat.id}`, {
+        method:  'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error ?? 'Delete failed')
+      onDeleted?.(cat.id)
+    } catch (err: any) {
+      setDeleteError((prev) => ({ ...prev, [cat.id]: err.message }))
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   if (loading) {
@@ -108,21 +130,46 @@ export default function CategoryList({
               )}
             </div>
 
-            {/* Meta + edit */}
+            {/* Meta + actions */}
             <div className="flex shrink-0 flex-col items-end gap-1.5">
-              <button
-                onClick={() => setEditingId(editingId === cat.id ? null : cat.id)}
-                className="flex items-center gap-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
-              >
-                <Pencil size={11} />
-                Edit
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setEditingId(editingId === cat.id ? null : cat.id)}
+                  className="flex items-center gap-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+                >
+                  <Pencil size={11} />
+                  Edit
+                </button>
+                <button
+                  onClick={() => handleDelete(cat)}
+                  disabled={deletingId === cat.id || (cat.productCount ?? 0) > 0}
+                  title={
+                    (cat.productCount ?? 0) > 0
+                      ? `Cannot delete: ${cat.productCount} product(s) linked`
+                      : 'Delete category'
+                  }
+                  className="flex items-center justify-center rounded-lg border border-border bg-background p-1.5 text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {deletingId === cat.id
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <Trash2 size={11} />
+                  }
+                </button>
+              </div>
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                 <Tag size={9} />
                 {cat.productCount ?? 0} products
               </span>
             </div>
           </div>
+
+          {/* Delete error */}
+          {deleteError[cat.id] && (
+            <div className="flex items-center gap-1.5 border-t border-dashed border-destructive/30 bg-destructive/5 px-3.5 py-1.5 text-[11px] text-destructive">
+              <XCircle size={11} />
+              {deleteError[cat.id]}
+            </div>
+          )}
 
           {/* Missing fields notice */}
           <MissingFieldsNotice cat={cat} />

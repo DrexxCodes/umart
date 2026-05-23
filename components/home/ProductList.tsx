@@ -21,7 +21,7 @@ interface CacheEntry {
 }
 
 const CACHE_KEY = 'umart_listing_cache'
-const CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000 // 8 days
+const CACHE_TTL_MS = 2 * 60 * 1000 // 2 minutes
 
 function sessionShuffle<T>(arr: T[]): T[] {
   let seed = parseInt(sessionStorage.getItem('umart_shuffle_seed') || '0')
@@ -42,16 +42,18 @@ function sessionShuffle<T>(arr: T[]): T[] {
   return copy
 }
 
-function readCache(): ListingProduct[] | null {
+function readCache(): { data: ListingProduct[]; stale: boolean } | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY)
     if (!raw) return null
     const entry: CacheEntry = JSON.parse(raw)
-    if (Date.now() - entry.fetchedAt > CACHE_TTL_MS) {
+    const age = Date.now() - entry.fetchedAt
+    if (age > CACHE_TTL_MS * 2) {
+      // Fully expired (> 4 min) — treat as nothing
       localStorage.removeItem(CACHE_KEY)
       return null
     }
-    return entry.data
+    return { data: entry.data, stale: age > CACHE_TTL_MS }
   } catch { return null }
 }
 
@@ -94,12 +96,29 @@ export function ProductList() {
     hasFetched.current = true
 
     const cached = readCache()
+
     if (cached) {
-      setProducts(sessionShuffle(cached))
+      // Serve cached data immediately — user sees products right away
+      setProducts(sessionShuffle(cached.data))
       setLoading(false)
+
+      if (cached.stale) {
+        // Cache is between 2–4 min old: revalidate in the background
+        // without showing a loading state (burst revalidation)
+        fetch('/api/products/listings')
+          .then((r) => r.json())
+          .then((result) => {
+            if (result.success && Array.isArray(result.data)) {
+              writeCache(result.data)
+              setProducts(sessionShuffle(result.data))
+            }
+          })
+          .catch(() => { /* silently keep stale data */ })
+      }
       return
     }
 
+    // No cache at all — full fetch with loading state
     fetch('/api/products/listings')
       .then((r) => r.json())
       .then((result) => {

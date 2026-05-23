@@ -216,8 +216,14 @@ export function CreatorCatalogueClient() {
           <Card className="w-full p-6 space-y-5 text-left">
             {/* Cover photo */}
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cover Photo</label>
+              <div className="flex items-baseline justify-between">
+                <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cover Photo</label>
+                <span className="text-[10px] text-muted-foreground/60">Best size: 1500 × 500 px (3:1 ratio)</span>
+              </div>
               <AvatarUpload current={coverPhoto} onUploaded={setCoverPhoto} label="Add cover" shape="rect" />
+              <p className="text-[11px] text-muted-foreground/50 -mt-1">
+                Use a wide landscape image — min 1500 px wide, 3:1 aspect ratio. JPG or PNG, under 5 MB.
+              </p>
             </div>
 
             {/* Profile photo */}

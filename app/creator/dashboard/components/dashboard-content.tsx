@@ -110,7 +110,7 @@ export function DashboardContent({ data }: { data: CreatorData }) {
               <h2 className="text-sm font-semibold text-foreground">Recent Listings</h2>
             </div>
             <Link
-              href="/creator/products"
+              href="/creator/product/my-products"
               className="flex items-center gap-1 text-xs text-primary hover:underline"
             >
               View all <ArrowRight className="w-3 h-3" />
