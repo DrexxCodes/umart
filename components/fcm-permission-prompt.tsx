@@ -1,10 +1,17 @@
 'use client'
 // components/fcm-permission-prompt.tsx
 //
-// Shows a friendly dialog asking the user for notification permission.
-// Rendered on the chat pages. Stores the resulting FCM token server-side.
-// If the user is currently on the app, real FCM pushes are suppressed in
-// favour of in-app toasts (handled in the service worker via focus check).
+// Shows a friendly bottom sheet asking for notification permission.
+// Rendered on BOTH buyer chat (/chat) and seller chat (/creator/chat).
+//
+// Behaviour:
+//  - On mount: if permission is already 'granted' → silently register token.
+//  - If permission is 'denied' → do nothing (browser already blocked it).
+//  - If permission is 'default' → show the prompt card after a 1.5s settle delay,
+//    UNLESS the user already dismissed it this session (sessionStorage flag).
+//    We use sessionStorage (not localStorage) so it re-prompts each new visit
+//    until they actually grant or deny it at the OS level.
+//  - Foreground messages → shown as Sonner toasts instead of native notifs.
 
 import { useEffect, useState } from 'react'
 import { getToken, onMessage } from 'firebase/messaging'
@@ -13,33 +20,42 @@ import { toast } from 'sonner'
 import { Bell, BellOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-const VAPID_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || ''
-const STORAGE_KEY = 'umart_notif_prompt'
+const VAPID_KEY   = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || ''
+const SESSION_KEY = 'umart_notif_dismissed'
 
 type PromptState = 'idle' | 'prompting' | 'done'
 
 export function FcmPermissionPrompt() {
-  const [state, setState] = useState<PromptState>('idle')
+  const [state,      setState]      = useState<PromptState>('idle')
   const [requesting, setRequesting] = useState(false)
 
+  // ── On mount: check current permission state ──────────────────────────────
   useEffect(() => {
-    // Only show once, only in browser, only if not already granted/denied
-    if (typeof window === 'undefined') return
-    if (Notification.permission === 'granted') {
-      // Already granted — silently register token in background
+    if (typeof window === 'undefined' || !('Notification' in window)) return
+
+    const perm = Notification.permission
+
+    if (perm === 'granted') {
+      // Already granted — silently ensure token is registered
       registerTokenSilently()
       return
     }
-    if (Notification.permission === 'denied') return
-    const dismissed = localStorage.getItem(STORAGE_KEY)
-    if (dismissed) return
 
-    // Small delay so the page settles before showing the prompt
-    const t = setTimeout(() => setState('prompting'), 2000)
+    if (perm === 'denied') {
+      // User blocked notifications at OS level — nothing we can do
+      return
+    }
+
+    // perm === 'default' — can still ask
+    // Don't re-prompt if the user dismissed this session
+    if (sessionStorage.getItem(SESSION_KEY)) return
+
+    // Small delay so the page fully settles before the card slides in
+    const t = setTimeout(() => setState('prompting'), 1500)
     return () => clearTimeout(t)
   }, [])
 
-  // Listen for foreground messages and show them as toasts instead of native notifs
+  // ── Listen for foreground messages and show as toasts ─────────────────────
   useEffect(() => {
     let unsub: (() => void) | undefined
     getFirebaseMessaging().then((messaging) => {
@@ -51,7 +67,7 @@ export function FcmPermissionPrompt() {
         toast(title, {
           description: body,
           action: {
-            label: 'View',
+            label:   'View',
             onClick: () => window.location.assign(url),
           },
         })
@@ -60,6 +76,7 @@ export function FcmPermissionPrompt() {
     return () => unsub?.()
   }, [])
 
+  // ── Silently register FCM token (called when already granted) ─────────────
   const registerTokenSilently = async () => {
     try {
       const messaging = await getFirebaseMessaging()
@@ -67,36 +84,38 @@ export function FcmPermissionPrompt() {
       const token = await getToken(messaging, { vapidKey: VAPID_KEY })
       if (token) await saveToken(token)
     } catch {
-      // Silently ignore — non-critical
+      // Non-critical — ignore
     }
   }
 
+  // ── User clicked "Alright!" ───────────────────────────────────────────────
   const handleAllow = async () => {
     setRequesting(true)
     try {
       const permission = await Notification.requestPermission()
       if (permission === 'granted') {
         await registerTokenSilently()
-        toast.success('Notifications enabled!')
+        toast.success('Notifications enabled! You\'ll never miss a message.')
       }
     } catch (err) {
-      console.error('FCM permission error:', err)
+      console.error('[FCM] Permission request error:', err)
     } finally {
-      localStorage.setItem(STORAGE_KEY, 'done')
+      sessionStorage.setItem(SESSION_KEY, '1')
       setRequesting(false)
       setState('done')
     }
   }
 
+  // ── User dismissed the card ───────────────────────────────────────────────
   const handleDismiss = () => {
-    localStorage.setItem(STORAGE_KEY, 'dismissed')
+    sessionStorage.setItem(SESSION_KEY, '1')
     setState('done')
   }
 
   if (state !== 'prompting') return null
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-sm">
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-sm animate-in slide-in-from-bottom-4 fade-in duration-300">
       <div className="bg-card border border-border rounded-2xl shadow-2xl p-5 space-y-4">
         <div className="flex items-start gap-3">
           <div className="flex-shrink-0 w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
@@ -105,8 +124,8 @@ export function FcmPermissionPrompt() {
           <div>
             <h3 className="font-semibold text-sm text-foreground">Stay in the loop</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              We'd like to send you push notifications when someone messages you — so you never miss a deal.
-              Just click <strong>Alright</strong> and allow in the next screen.
+              Allow push notifications so you never miss a message even when the app is in the background.
+              Tap <strong>Allow</strong> and confirm in the next prompt.
             </p>
           </div>
         </div>
@@ -118,7 +137,7 @@ export function FcmPermissionPrompt() {
             onClick={handleDismiss}
           >
             <BellOff className="w-3.5 h-3.5" />
-            Please don't
+            Not now
           </Button>
           <Button
             size="sm"
@@ -127,7 +146,7 @@ export function FcmPermissionPrompt() {
             disabled={requesting}
           >
             <Bell className="w-3.5 h-3.5" />
-            Alright!
+            {requesting ? 'Requesting…' : 'Allow'}
           </Button>
         </div>
       </div>
@@ -138,13 +157,17 @@ export function FcmPermissionPrompt() {
 async function saveToken(token: string) {
   const user = auth.currentUser
   if (!user) return
-  const idToken = await user.getIdToken()
-  await fetch('/api/fcm/register', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${idToken}`,
-    },
-    body: JSON.stringify({ token }),
-  })
+  try {
+    const idToken = await user.getIdToken()
+    await fetch('/api/fcm/register', {
+      method:  'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization:  `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ token }),
+    })
+  } catch {
+    // Non-critical
+  }
 }

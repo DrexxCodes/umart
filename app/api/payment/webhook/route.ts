@@ -199,33 +199,29 @@ async function handleTransferSuccess(data: Record<string, unknown>) {
       return
     }
 
-    const { payoutAmount = 0, sellerId } = payQueueDoc.data()!
+    const { payoutAmount = 0 } = payQueueDoc.data()!
     const { year: y, month: m, day: d } = getNigerianDateParts()
+
+    // NOTE: withdrawn=true and seller stats are now set atomically by the admin
+    // PATCH /api/admin/payQueue when they mark status=completed.
+    // The webhook just marks the queue entry status to reflect Paystack's response.
+    // If the admin marked it completed before the webhook fires, skip.
+    if (payQueueDoc.data()!.status === 'completed') {
+      console.log(`[webhook/paystack] transfer.success — already completed: ${refId}`)
+      return
+    }
 
     const batch = adminDb.batch()
 
     batch.update(adminDb.collection('payQueue').doc(refId), {
-      status:       'paid',
-      paidAt:       FieldValue.serverTimestamp(),
+      status:       'processing',
+      processingAt: FieldValue.serverTimestamp(),
       transferCode: data.transfer_code,
       updatedAt:    FieldValue.serverTimestamp(),
     })
 
-    if (sellerId && payoutAmount > 0) {
-      batch.set(adminDb.collection('users').doc(sellerId), {
-        totalWithdrawn:      FieldValue.increment(payoutAmount),
-        totalWithdrawnCount: FieldValue.increment(1),
-      }, { merge: true })
-    }
-
-    const wp = { totalWithdrawn: FieldValue.increment(payoutAmount), updatedAt: FieldValue.serverTimestamp() }
-    batch.set(adminDb.collection('admin').doc('analytics').collection('daily').doc(d),   wp, { merge: true })
-    batch.set(adminDb.collection('admin').doc('analytics').collection('monthly').doc(m), wp, { merge: true })
-    batch.set(adminDb.collection('admin').doc('analytics').collection('yearly').doc(y),  wp, { merge: true })
-
     await batch.commit()
-    console.log(`[webhook/paystack] transfer.success (payout) — refId: ${refId}, ₦${payoutAmount}`)
-    return
+    console.log(`[webhook/paystack] transfer.success (payout) — marked processing — refId: ${refId}, ₦${payoutAmount}`)
   }
 
   if (reference.startsWith('refund-')) {

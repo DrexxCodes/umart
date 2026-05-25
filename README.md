@@ -1,152 +1,181 @@
-# Umart — Refactor Changelog
+# U Mart (uHomes Mart)
 
-## Summary of Changes
-
-### 1. Rate Limiting (`lib/rate-limit.ts`)
-A lightweight, in-memory sliding-window rate limiter was added. It is applied across all mutating API routes:
-
-| Route | Limit |
-|---|---|
-| `POST /api/payment/create` | 20 req / 60 s |
-| `POST /api/payment/withdraw` | 5 req / 60 s |
-| `POST /api/dispute/create` | 10 req / 60 s |
-| `PATCH /api/dispute/status` | 20 req / 60 s |
-| `GET /api/transactions` | 60 req / 60 s |
-| `POST /api/users` | 10 req / 60 s |
-| `POST /api/creator/products` | 30 req / 60 s |
-| `POST /api/products` | 30 req / 60 s |
-
-All rate-limited responses return `429` with `X-RateLimit-*` headers.
+A full-stack escrow marketplace built with **Next.js 16**, **Firebase**, **Credo** and **Paystack**, designed for students and communities.
 
 ---
 
-### 2. Payment System → Paystack (`lib/paystack.ts`)
-Monnify has been fully replaced with Paystack across the entire codebase:
+## Tech Stack
 
-- **`components/payment.tsx`** — `PaystackPop.setup()` inline popup; Paystack script loaded on demand.
-- **`app/api/payment/webhook/route.ts`** — Validates `x-paystack-signature` (HMAC-SHA512). Handles:
-  - `charge.success` → marks reference paid, updates escrow + analytics
-  - `transfer.success` → marks `payQueue` entry as paid (seller payout) **or** marks dispute as refunded (buyer refund)
-  - `transfer.failed` / `transfer.reversed` → reverts `withdrawn` flag (payout) or logs failure (refund)
-- **`app/api/payment/withdraw/route.ts`** — Creates Paystack transfer recipient, initiates transfer via API; transfer reason is `"Payment for {productName}"`.
-- **`app/api/dispute/status/route.ts`** — When status is set to `refunded`, initiates Paystack transfer to buyer; transfer reason is `"Refund for {productName}"`.
-- **`.env`** — Monnify keys replaced with:
-  ```
-  NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY=pk_test_...
-  PAYSTACK_SECRET_KEY=sk_test_...
-  ```
-
----
-
-### 3. Generic Slug / Keyword System (`lib/slugify.ts`)
-`generateSearchKeywords()` now works for **any** brand and model — phones, laptops, shoes, clothing, gadgets, etc. It:
-- Always generates keywords from brand alone (so search works even without a model)
-- Extracts numbers, word tokens, and known variant suffixes (`pro`, `ultra`, `plus`, `max`, etc.)
-- Has brand-specific expansions for Apple (iPhone), Samsung (Galaxy), and common shoe brands
-- **`Step1-Category.tsx`** — Brand is now **required**; model is optional with a hint explaining it improves discoverability
-- **`client.tsx`** (create product) — Keywords are generated for ALL categories, not just phones
+| Layer        | Tech                                                                 |
+|--------------|----------------------------------------------------------------------|
+| Framework    | Next.js 16 (App Router, TypeScript)                                  |
+| Styling      | Tailwind CSS v4                                                      |
+| Auth         | Firebase Auth (email/password) + httpOnly JWT cookies                |
+| Database     | Firestore (Firebase Admin SDK server-side, client SDK for auth only) |
+| Storage      | Firebase Storage + Cloudinary (product images)                       |
+| Push Notifs  | Firebase Cloud Messaging (FCM)                                       |
+| Payments     | Credo (checkout), Paystack (payouts & refunds)                       |
+| Charts       | Recharts                                                             |
+| AI Negotiator| Claude (Anthropic) — Clara AI on product pages                      |
+| Linting      | Biome                                                                |
 
 ---
 
-### 4. Dispute System
+## Getting Started
 
-#### Firestore Schema
-```
-disputes/{txnId}
-  ├── txnId, buyerId, sellerId, creatorUID
-  ├── title, details
-  ├── attachments: [{ url, type }]
-  ├── status: 'open' | 'resolving' | 'closed' | 'refunded'
-  ├── productName, grandPrice, sellerPayout
-  ├── buyerBankCode, buyerBankName, buyerAccountNumber, buyerAccountName
-  ├── buyerRecipientCode (set when refund is first processed)
-  └── createdAt, updatedAt
+### 1. Install dependencies
 
-references/{txnId}
-  └── status: ... | 'disputing' | 'refunded'  ← two new states
+```bash
+npm install
 ```
 
-#### API Routes
-| Route | Method | Auth | Description |
-|---|---|---|---|
-| `/api/dispute/create` | POST | Bearer token | Creates dispute, sets txn status → `disputing` |
-| `/api/dispute/list` | GET | Bearer or session cookie | Returns disputes filtered by `role=buyer|creator|admin` |
-| `/api/dispute/status` | PATCH | Admin session cookie | Updates status; triggers Paystack refund on `refunded` |
+### 2. Configure environment variables
 
-#### `app/disputes` (buyer)
-- Lists all paid transactions with a **Dispute** button on each
-- Opens `DisputeDialog` (dispute title, details, file uploads, **bank account for refund**)
-- Uploads go to Cloudinary — images ≤ 5 MB, videos ≤ 20 MB
-- On submit → success toast: *"Umart and the seller have received your dispute, we shall send you an email to continue the claim"*
+Copy `.env.example` to `.env.local` and fill in all values:
 
-#### `app/creator/disputes` (seller)
-- Lists disputes where the creator's UID matches
-- Shows status badge + human-readable interpretation per status:
-  - **Open** — dispute logged, will be contacted
-  - **Resolving** — under investigation
-  - **Closed** — insufficient evidence
-  - **Refunded** — claim valid, buyer refunded
+```bash
+cp .env.example .env.local
+```
 
-#### `app/admin/disputes` (admin)
-- Full list with filter tabs (All / Open / Resolving / Closed / Refunded)
-- Click any dispute to open `AdminDisputeDialog`:
-  - Shows full dispute details, attachments (linked to Cloudinary), buyer bank account
-  - Status selector; if admin picks **Refunded**: a confirmation warning appears explaining that **₦X will be immediately transferred to the buyer's account via Paystack** before they can confirm
-  - On confirm → triggers Paystack transfer; webhook updates status asynchronously
+See `.env.example` for the full list of required variables, including:
+- Firebase (client + Admin SDK)
+- Credo payment keys & webhook token
+- Paystack secret key
+- Cloudinary upload preset
+- FCM VAPID key
+- Internal API secret
 
-#### Navigation
-- **Buyer nav** — Disputes link already present (`/disputes`)
-- **Creator nav** — Disputes link already present (`/creator/disputes`)
-- **Admin sidebar** — Disputes link already present (`/admin/disputes`)
+### 3. Run the development server
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
 
 ---
 
-### 5. Seller Withdrawal Flow (Paystack)
-- **`components/withdraw.tsx`** — New **account picker** dialog view:
-  1. Shows previously saved bank accounts (loaded from `bankInfo` collection)
-  2. Option to add a new account (original form, now navigated to via "Use a different account")
-  3. Selecting a saved account and confirming calls the withdraw API with `savedAccountId`
-- **`app/api/payment/withdraw/route.ts`**:
-  - On new account: saves to `bankInfo/{id}` with `uid`, bank details, `recipientCode: null`
-  - Creates Paystack recipient → stores `recipientCode` back on the `bankInfo` doc
-  - Subsequent withdrawals reuse the stored `recipientCode` (no duplicate recipient creation)
-  - Initiates transfer immediately; `payQueue` entry created with `status: 'pending'`
-  - Webhook (`transfer.success`) updates to `paid`; (`transfer.failed`) reverts `withdrawn = false` so seller can retry
+## Project Structure
 
-#### Firestore Schema
 ```
-bankInfo/{accountInfoRef}
-  ├── uid (creator UID)
-  ├── bankCode, bankName, accountNumber, accountName
-  ├── recipientCode (null until first Paystack call; then stored)
-  └── createdAt
+app/
+├── admin/               # Admin portal (protected, isAdmin role)
+│   ├── categories/      # Create & manage product categories
+│   ├── disputes/        # Dispute resolution
+│   ├── inventory/       # Product inventory management
+│   ├── pay-queue/       # Payment queue & payouts
+│   ├── referrals/       # Referral code insights dashboard
+│   ├── references/      # Transaction references
+│   └── users/           # User management
+│
+├── api/
+│   ├── admin/referrals/ # Admin-only referral data API
+│   ├── chat/            # Chat send + FCM push notify
+│   ├── creator/
+│   │   └── products/categories/  # CRUD for product categories
+│   ├── fcm/register/    # Register / remove FCM device tokens
+│   ├── payment/webhook/ # Credo webhook handler (SHA-512 signature verified)
+│   ├── referrals/       # Create referral codes + track signups
+│   └── users/           # User profile, cookies, me, logout
+│
+├── auth/
+│   ├── login/
+│   └── signup/          # Supports ?ref={refrId} URL param for referrals
+│
+├── chat/                # Buyer chat (with FCM permission prompt)
+├── creator/             # Seller portal
+├── referrals/           # Buyer referral code page
+└── ...
 ```
 
 ---
 
-### 6. Buyer Value Confirmation Dialog Update
-`app/transactions/client.tsx` — The "Confirm Value Received" dialog already contained the payout warning and dispute redirect. The messaging reads:
-> *"We will pay out the seller immediately. Only confirm if you have gotten what you ordered, otherwise create a dispute."*
-This is wired to redirect to `/disputes` if the buyer chooses "Create Dispute Instead".
+## Key Features
+
+### Escrow Payments
+Buyers pay via Credo; funds are held until the buyer confirms receipt. Sellers then request withdrawal via Paystack.
+
+### Credo Webhook Security
+Webhook signatures are verified using `SHA-512(webhookToken + businessCode)` and compared against the `x-credo-signature` header. Configure `CREDO_WEBHOOK_TOKEN` and `CREDO_BUSINESS_CODE` in `.env.local`.
+
+### Firebase Cloud Messaging (Push Notifications)
+- **`FcmPermissionPrompt`** — shown on chat pages; asks the user to allow notifications and registers their FCM token via `/api/fcm/register`.
+- **`ServiceWorkerRegistrar`** — registers both the PWA service worker (`sw.js`) and the Firebase Messaging service worker (`firebase-messaging-sw.js`), then posts the Firebase config to the messaging SW via `postMessage` (since static service workers cannot read `NEXT_PUBLIC_*` env vars).
+- Foreground messages are shown as Sonner toasts; background messages trigger native push notifications.
+
+### Product Categories
+Admins create and manage product categories at `/admin/categories`. Categories are stored in `productCategories/{slug}` in Firestore.
+
+API: `GET /api/creator/products/categories` (public) · `POST /api/creator/products/categories` (admin) · `PATCH /api/creator/products/categories?id=` (admin) · `GET/PATCH/DELETE /api/creator/products/categories/[id]` (admin)
+
+### Referral System
+
+#### Firestore structure
+```
+referrals/{refrId}
+  campaignName:   string
+  ownerId:        string          # uid of creator
+  ownerName:      string
+  signupCount:    number          # incremented on every signup
+  dailySignups:   { 'YYYY-MM-DD': number }   # aggregated for graphs
+  createdAt:      string
+  updatedAt:      string
+  signups/{userId}
+    userId, fullname, email, signedUpAt
+```
+
+`users/{userId}.myrefcode` stores the user's own referral code for fast page-load lookup.
+
+#### Buyer flow (`/referrals`)
+1. On load, checks `localStorage` cache (30-day TTL) then `/api/referrals?userId=`.
+2. If no code exists, the user enters a campaign name and generates one.
+3. The page shows the code, a share button, stats (signups / active days / peak day) and an area chart of daily signup behaviour.
+
+#### Signup flow (`/auth/signup`)
+- Accepts `?ref={refrId}` URL param — auto-fills the referral field.
+- After 5 seconds without user input, verifies the code and shows `"{campaignName} referred you!"`.
+- On successful signup, calls `POST /api/referrals?action=track` (fire-and-forget) to record the signup and increment daily counts.
+
+#### Admin view (`/admin/referrals`)
+- Left panel: list of all referral codes with owner, signup count, and creation date.
+- Right panel: bar chart of daily signups (peak days highlighted) + cumulative area trend chart.
+
+### Clara AI Negotiator
+Sellers can configure an AI negotiator on their product edit page — set a floor price, tone, and up to 10 FAQ entries. Clara uses Claude (Anthropic) to handle buyer negotiations automatically.
 
 ---
 
-## Environment Variables Required
+## API Reference (key endpoints)
 
-See `.env.example` for the full list. Key new variables:
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/creator/products/categories` | Public | List all product categories |
+| POST | `/api/creator/products/categories` | Admin | Create a new category |
+| PATCH | `/api/creator/products/categories?id=` | Admin | Update a category |
+| POST | `/api/payment/webhook` | Credo signature | Handle Credo payment events |
+| POST | `/api/fcm/register` | Bearer | Register FCM device token |
+| DELETE | `/api/fcm/register` | Bearer | Remove FCM device token |
+| GET | `/api/referrals?code=` | Public | Verify referral code |
+| GET | `/api/referrals?userId=` | Bearer | Fetch user's referral codes |
+| POST | `/api/referrals` | Bearer | Create referral code |
+| POST | `/api/referrals?action=track` | Public | Track signup under referral |
+| GET | `/api/admin/referrals` | Admin | List all referral codes |
+| GET | `/api/admin/referrals?id=` | Admin | Single referral + signup list |
 
-```env
-NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY=pk_test_...
-PAYSTACK_SECRET_KEY=sk_test_...
+---
+
+## Environment Variables
+
+See `.env.example` for the complete and documented list.
+
+---
+
+## Scripts
+
+```bash
+npm run dev       # Start development server
+npm run build     # Production build
+npm run start     # Start production server
+npm run lint      # Biome lint check
+npm run format    # Biome format (auto-fix)
 ```
-
-Register your Paystack webhook at:
-`https://dashboard.paystack.com/#/settings/developer`
-
-Point it to: `https://yourdomain.com/api/payment/webhook`
-
-Events to enable:
-- `charge.success`
-- `transfer.success`
-- `transfer.failed`
-- `transfer.reversed`

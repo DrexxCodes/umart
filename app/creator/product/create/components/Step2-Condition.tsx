@@ -59,11 +59,12 @@ export function Step2Condition({
   }
 
   const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Allow empty string so the field can be fully cleared
     onChange({ ...data, price: e.target.value })
   }
 
   const handleProductAgeChange = (value: string) => {
-    const numValue = parseInt(value) || 0
+    const numValue = value === '' ? 0 : Math.max(0, parseInt(value) || 0)
     onChange({ ...data, productAge: { ...data.productAge, value: numValue } })
   }
 
@@ -139,11 +140,12 @@ export function Step2Condition({
           <label className="text-sm font-medium">Price (NGN)</label>
           <Input
             type="number"
-            value={data.price}
+            value={data.price === '0' || data.price === '' ? '' : data.price}
             onChange={handlePriceChange}
             placeholder="Enter price in Naira"
             step="1000"
             min="0"
+            inputMode="numeric"
           />
         </div>
 
@@ -153,11 +155,12 @@ export function Step2Condition({
           <div className="grid grid-cols-3 gap-2">
             <Input
               type="number"
-              value={data.productAge.value}
+              value={data.productAge.value === 0 ? '' : data.productAge.value}
               onChange={(e) => handleProductAgeChange(e.target.value)}
               placeholder="e.g., 1"
               min="0"
               max="100"
+              inputMode="numeric"
               className="col-span-1"
             />
             <div className="col-span-2 relative">

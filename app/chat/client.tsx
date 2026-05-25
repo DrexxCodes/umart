@@ -101,6 +101,7 @@ export function ChatClient() {
         </div>
       </div>
 
+      <FcmPermissionPrompt />
     </div>
   )
 }

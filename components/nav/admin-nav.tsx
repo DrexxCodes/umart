@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import {
   LayoutDashboard, FileText, Package, Tag, Users,
   Sun, Moon, ChevronRight, ShieldCheck, X, Menu,
-  LayoutList, ShieldAlert,
+  LayoutList, ShieldAlert, Gift,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { label: 'Disputes',   href: '/admin/disputes',    icon: ShieldAlert,     exact: false },
   { label: 'Inventory',  href: '/admin/inventory',   icon: Package,         exact: false },
   { label: 'Categories', href: '/admin/categories',  icon: Tag,             exact: false },
+  { label: 'Referrals',  href: '/admin/referrals',   icon: Gift,            exact: false },
   { label: 'Users',      href: '/admin/users',       icon: Users,           exact: false },
 ]
 

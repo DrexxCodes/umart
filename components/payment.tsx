@@ -176,16 +176,19 @@ export function AlreadyPaid({ refId, onConfirmed, onFailed }: AlreadyPaidProps) 
         return
       }
 
-    if (result.data.status === 'paid') {
-      setMessage('Payment confirmed! Updating...')
+    const status = result.data?.status ?? result.status
+
+    if (status === 'paid') {
+      setMessage('Payment confirmed!')
       onConfirmed?.()
-    } else if (result.data.status === 'failed') {
-      setMessage('Payment not completed.')
+    } else if (status === 'failed') {
+      setMessage('Payment failed or was declined. Please try again.')
       onFailed?.()
-    } else if (result.data.status === 'not_found') {
-      setMessage('No payment attempt found. Please use Pay Now.')
+    } else if (status === 'not_found') {
+      setMessage('No payment attempt found for this order. Please use Pay Now.')
     } else {
-      setMessage('Payment still pending. Try again in a moment.')
+      // pending or anything else from Credo
+      setMessage('Payment still pending — please wait a moment and try again.')
     }
 
       setState('done')
@@ -205,8 +208,12 @@ export function AlreadyPaid({ refId, onConfirmed, onFailed }: AlreadyPaidProps) 
   }
 
   if (state === 'done' && message) {
+    const isSuccess = message.startsWith('Payment confirmed')
+    const isFailed  = message.startsWith('Payment failed')
     return (
-      <span className="text-xs text-muted-foreground">{message}</span>
+      <span className={`text-xs ${isSuccess ? 'text-emerald-600 font-medium' : isFailed ? 'text-destructive' : 'text-muted-foreground'}`}>
+        {message}
+      </span>
     )
   }
 

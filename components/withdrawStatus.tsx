@@ -1,66 +1,41 @@
 'use client'
 
-import { CheckCircle2, Clock, XCircle, ExternalLink } from 'lucide-react'
+import { CheckCircle2, Clock, Zap, ExternalLink } from 'lucide-react'
 import { convertToDate, formatDateTime } from '@/lib/timestamp'
 
-interface WithdrawStatusProps {
-  status: 'pending' | 'paid' | 'failed'
-  pendingAt?: any   // Firestore Timestamp / ISO string / number
-  paidAt?: any
+export interface WithdrawStatusProps {
+  status:       'pending' | 'processing' | 'completed'
+  pendingAt?:   any   // Firestore Timestamp / ISO string / number
+  completedAt?: any
   payoutAmount: number
 }
 
 const SUPPORT_URL = 'https://support.umart.com.ng'
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000
 
+const STEPS = [
+  { key: 'pending',    label: 'Requested', Icon: Clock        },
+  { key: 'processing', label: 'Processing', Icon: Zap         },
+  { key: 'completed',  label: 'Completed',  Icon: CheckCircle2 },
+] as const
+
+const ORDER: Record<string, number> = { pending: 0, processing: 1, completed: 2 }
+
 export function WithdrawStatus({
   status,
   pendingAt,
-  paidAt,
+  completedAt,
   payoutAmount,
 }: WithdrawStatusProps) {
-  const pendingDate = pendingAt ? convertToDate(pendingAt) : null
-  const paidDate = paidAt ? convertToDate(paidAt) : null
+  const pendingDate   = pendingAt   ? convertToDate(pendingAt)   : null
+  const completedDate = completedAt ? convertToDate(completedAt) : null
+
+  const currentOrder = ORDER[status] ?? 0
 
   const isStale =
     status === 'pending' &&
     pendingDate != null &&
     Date.now() - pendingDate.getTime() > TWO_DAYS_MS
-
-  // ── Failed state ────────────────────────────────────────────────────────────
-  if (status === 'failed') {
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-col items-center gap-3 py-6 text-center">
-          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center">
-            <XCircle className="w-6 h-6 text-destructive" />
-          </div>
-          <div>
-            <p className="font-semibold text-foreground">Withdrawal Failed</p>
-            <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-              Something went wrong with your withdrawal. Contact support for help.
-            </p>
-          </div>
-          <a
-            href={SUPPORT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-          >
-            Contact Support <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        </div>
-        {pendingDate && (
-          <div className="pt-4 border-t border-border text-center text-xs text-muted-foreground">
-            Requested on {formatDateTime(pendingDate)}
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  // ── Pending / Paid state — linear progress ──────────────────────────────────
-  const isPaid = status === 'paid'
 
   return (
     <div className="space-y-6">
@@ -74,32 +49,66 @@ export function WithdrawStatus({
         </p>
       </div>
 
-      {/* Linear step tracker */}
+      {/* 3-step tracker */}
       <div className="relative flex items-start justify-between gap-2">
-        {/* Connector line — behind the dots */}
-        <div className="absolute top-4 left-[calc(50%-50%+20px)] right-[calc(50%-50%+20px)] h-0.5 bg-border z-0">
+        {/* Connector line */}
+        <div className="absolute top-4 left-[calc(16.66%)] right-[calc(16.66%)] h-0.5 bg-border z-0">
           <div
-            className={`h-full bg-primary transition-all duration-700 ease-out ${
-              isPaid ? 'w-full' : 'w-0'
-            }`}
+            className="h-full bg-primary transition-all duration-700 ease-out"
+            style={{ width: currentOrder === 0 ? '0%' : currentOrder === 1 ? '50%' : '100%' }}
           />
         </div>
 
-        {/* Step: Pending */}
-        <Step
-          label="Pending"
-          date={pendingDate}
-          active
-          done={isPaid}
-        />
+        {STEPS.map((step, i) => {
+          const stepOrder = ORDER[step.key]
+          const done      = stepOrder < currentOrder
+          const active    = stepOrder === currentOrder
+          const date      = step.key === 'pending' ? pendingDate : step.key === 'completed' ? completedDate : null
 
-        {/* Step: Paid */}
-        <Step
-          label="Paid"
-          date={paidDate}
-          active={isPaid}
-          done={isPaid}
-        />
+          return (
+            <div key={step.key} className="flex flex-col items-center gap-2 z-10 flex-1">
+              <div
+                className={`
+                  w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all duration-500
+                  ${done
+                    ? 'bg-primary border-primary text-primary-foreground'
+                    : active
+                    ? 'bg-background border-primary text-primary'
+                    : 'bg-background border-border text-muted-foreground'
+                  }
+                `}
+              >
+                {done
+                  ? <CheckCircle2 className="w-4 h-4" />
+                  : <step.Icon className="w-4 h-4" />
+                }
+              </div>
+              <div className="text-center">
+                <p className={`text-xs font-semibold ${active || done ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {step.label}
+                </p>
+                {date && (
+                  <p className="text-[0.65rem] text-muted-foreground mt-0.5 leading-tight">
+                    {formatDateTime(date)}
+                  </p>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Status message */}
+      <div className={`rounded-xl border px-4 py-3 text-center text-xs font-medium ${
+        status === 'completed'
+          ? 'border-emerald-500/20 bg-emerald-500/8 text-emerald-600 dark:text-emerald-400'
+          : status === 'processing'
+          ? 'border-blue-500/20 bg-blue-500/8 text-blue-600 dark:text-blue-400'
+          : 'border-amber-500/20 bg-amber-500/8 text-amber-600 dark:text-amber-400'
+      }`}>
+        {status === 'completed'  && 'Your withdrawal has been completed successfully.'}
+        {status === 'processing' && 'Your withdrawal is being processed. Funds will arrive soon.'}
+        {status === 'pending'    && 'Your withdrawal request has been received and is in the queue.'}
       </div>
 
       {/* Stale warning */}
@@ -118,51 +127,6 @@ export function WithdrawStatus({
           </a>
         </div>
       )}
-    </div>
-  )
-}
-
-// ── Sub-component: individual step ────────────────────────────────────────────
-function Step({
-  label,
-  date,
-  active,
-  done,
-}: {
-  label: string
-  date: Date | null
-  active: boolean
-  done: boolean
-}) {
-  return (
-    <div className="flex flex-col items-center gap-2 z-10 flex-1">
-      <div
-        className={`
-          w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all duration-500
-          ${done
-            ? 'bg-primary border-primary text-primary-foreground'
-            : active
-            ? 'bg-background border-primary text-primary'
-            : 'bg-background border-border text-muted-foreground'
-          }
-        `}
-      >
-        {done ? (
-          <CheckCircle2 className="w-4 h-4" />
-        ) : (
-          <Clock className="w-4 h-4" />
-        )}
-      </div>
-      <div className="text-center">
-        <p className={`text-xs font-semibold ${active ? 'text-foreground' : 'text-muted-foreground'}`}>
-          {label}
-        </p>
-        {date && (
-          <p className="text-[0.65rem] text-muted-foreground mt-0.5 leading-tight">
-            {formatDateTime(date)}
-          </p>
-        )}
-      </div>
     </div>
   )
 }

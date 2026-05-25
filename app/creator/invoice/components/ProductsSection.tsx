@@ -209,12 +209,14 @@ export function ProductsSection({ items, onItemsChange }: ProductsSectionProps) 
                       <Input
                         type="number"
                         min="1"
-                        value={item.quantity}
+                        inputMode="numeric"
+                        value={item.quantity === 0 ? '' : item.quantity}
                         onChange={(e) =>
                           updateItem(item.id, {
-                            quantity: parseInt(e.target.value) || 1,
+                            quantity: e.target.value === '' ? 1 : Math.max(1, parseInt(e.target.value) || 1),
                           })
                         }
+                        placeholder="1"
                       />
                     </div>
                     <div>
@@ -225,10 +227,11 @@ export function ProductsSection({ items, onItemsChange }: ProductsSectionProps) 
                         type="number"
                         min="0"
                         step="0.01"
-                        value={item.price}
+                        inputMode="decimal"
+                        value={item.price === 0 ? '' : item.price}
                         onChange={(e) =>
                           updateItem(item.id, {
-                            price: parseFloat(e.target.value) || 0,
+                            price: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0,
                           })
                         }
                         placeholder="Enter price"

@@ -26,10 +26,10 @@ interface WithdrawProps {
 }
 
 interface PayQueueEntry {
-  status: 'pending' | 'paid' | 'failed'
+  status: 'pending' | 'processing' | 'completed'
   payoutAmount: number
   pendingAt?: any
-  paidAt?: any
+  completedAt?: any
 }
 
 type DialogView = 'picker' | 'form' | 'status' | 'success'
@@ -230,8 +230,8 @@ export function Withdraw({
       )
     }
     if (queueEntry) {
-      const statusLabel = queueEntry.status === 'paid' ? 'Paid' : queueEntry.status === 'failed' ? 'Failed' : 'Pending'
-      const statusVariant = queueEntry.status === 'paid' ? 'default' : queueEntry.status === 'failed' ? 'destructive' : 'outline'
+      const statusLabel   = queueEntry.status === 'completed' ? 'Completed' : queueEntry.status === 'processing' ? 'Processing' : 'Pending'
+      const statusVariant = queueEntry.status === 'completed' ? 'default' : 'outline'
       return (
         <Button variant={statusVariant} size="sm" onClick={() => openDialog('status')}>
           <Banknote className="w-3.5 h-3.5 mr-1.5" />{statusLabel}
@@ -294,7 +294,7 @@ export function Withdraw({
                   <WithdrawStatus
                     status={queueEntry.status}
                     pendingAt={queueEntry.pendingAt}
-                    paidAt={queueEntry.paidAt}
+                    completedAt={queueEntry.completedAt}
                     payoutAmount={queueEntry.payoutAmount}
                   />
                 )}

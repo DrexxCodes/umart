@@ -2,13 +2,13 @@
 
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
-import { Moon, Sun, Home, Grid, MessageCircle, User, History, Menu, X, Store, ShieldAlert } from 'lucide-react'
+import { Moon, Sun, Home, Grid, MessageCircle, User, History, Menu, X, Store, ShieldAlert, Gift } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 
-const PROTECTED_PREFIXES = ['/creator', '/admin', '/chat', '/dashboard', '/disputes', '/transactions']
+const PROTECTED_PREFIXES = ['/creator', '/admin', '/chat', '/dashboard', '/disputes', '/transactions', '/referrals']
 
 function isProtected(href: string) {
   return PROTECTED_PREFIXES.some((prefix) => href.startsWith(prefix))
@@ -43,6 +43,7 @@ export function BuyerNav() {
     { label: 'Home',        href: '/',             icon: Home },
     { label: 'Categories',  href: '/categories',   icon: Grid },
     { label: 'Chat',        href: '/chat',          icon: MessageCircle },
+    { label: 'Referrals',   href: '/referrals',    icon: Gift },
     { label: 'Profile',     href: '/profile',       icon: User },
     { label: 'History',     href: '/transactions',  icon: History },
     { label: 'Disputes',    href: '/disputes',      icon: ShieldAlert },

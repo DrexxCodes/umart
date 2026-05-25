@@ -206,7 +206,7 @@ export async function POST(req: NextRequest) {
 
           const now = Timestamp.now()
           const refId = `umart-${Date.now()}`
-          const platformFee = Math.round((agreedAmount * 0.05 + 300) * 100) / 100
+          const platformFee = Math.round((agreedAmount * 0.025 + 100) * 100) / 100
           const grandPrice = agreedAmount + platformFee
           const sellerPayout = agreedAmount
 

@@ -46,21 +46,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        {/* PWA / Firebase SW config injected for the service worker */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `self.__FIREBASE_CONFIG = ${JSON.stringify({
-              apiKey:            process.env.NEXT_PUBLIC_FIREBASE_API_KEY            ?? '',
-              authDomain:        process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN        ?? '',
-              projectId:         process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID         ?? '',
-              storageBucket:     process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET     ?? '',
-              messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? '',
-              appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID             ?? '',
-            })}`,
-          }}
-        />
-      </head>
+      <head />
       <body className="font-sans antialiased flex flex-col min-h-screen">
         <ThemeProvider>
           <AuthProvider>

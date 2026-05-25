@@ -1,43 +1,67 @@
 // public/firebase-messaging-sw.js
 // Firebase Cloud Messaging service worker.
-// This file MUST be at the root of /public so it's served from /.
-// It handles background push notifications when the app is not in focus.
+// Handles background push notifications when the app tab is not focused.
 
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js')
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js')
 
-// These values are injected at runtime — they are public-safe NEXT_PUBLIC_ vars.
-// We can't use process.env here (no Node), so we fall back to self.__WB_MANIFEST
-// trick or use a config endpoint. Simplest approach: hardcode via a build step.
-// For now use a self config object that Next.js can populate via next.config.js
-// env injection, or you can hardcode these directly from your Firebase Console.
-firebase.initializeApp({
-  apiKey:            self.__FIREBASE_CONFIG?.apiKey            || '',
-  authDomain:        self.__FIREBASE_CONFIG?.authDomain        || '',
-  projectId:         self.__FIREBASE_CONFIG?.projectId         || '',
-  storageBucket:     self.__FIREBASE_CONFIG?.storageBucket     || '',
-  messagingSenderId: self.__FIREBASE_CONFIG?.messagingSenderId || '',
-  appId:             self.__FIREBASE_CONFIG?.appId             || '',
+// Config is posted to this SW via postMessage from ServiceWorkerRegistrar
+// after registration. We cache it in a module-scope variable.
+let _app = null
+
+function initIfNeeded(config) {
+  if (_app) return
+  if (!config || !config.apiKey) return
+  try {
+    _app = firebase.initializeApp(config)
+  } catch (e) {
+    // Already initialized (e.g. after SW update)
+    _app = firebase.app()
+  }
+}
+
+// Listen for config posted from the page
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'FIREBASE_CONFIG') {
+    initIfNeeded(event.data.config)
+  }
 })
 
-const messaging = firebase.messaging()
-
-// Handle background messages
-messaging.onBackgroundMessage((payload) => {
-  const title = payload.notification?.title ?? 'Umart'
-  const body  = payload.notification?.body  ?? ''
-  const url   = payload.data?.url ?? '/'
-  const tag   = payload.notification?.tag   ?? 'umart-default'
-
-  self.registration.showNotification(title, {
-    body,
-    icon:    '/icon-192x192.png',
-    badge:   '/badge-72x72.png',
-    tag,
-    renotify: true,
-    data: { url },
-  })
+// Handle background messages — only works after firebase is initialized
+self.addEventListener('push', () => {
+  // Firebase messaging compat handles this via onBackgroundMessage below
 })
+
+// Wait until we have a messaging instance to set up the handler.
+// We use a small polling approach since SW modules can't await promises
+// at the top level in all environments.
+let _messagingSetup = false
+
+function setupMessaging() {
+  if (_messagingSetup || !_app) return
+  try {
+    const messaging = firebase.messaging()
+    _messagingSetup = true
+
+    messaging.onBackgroundMessage((payload) => {
+      const title = payload.notification?.title ?? 'Umart'
+      const body  = payload.notification?.body  ?? ''
+      const url   = payload.data?.url ?? '/'
+      const tag   = payload.notification?.tag   ?? 'umart-default'
+
+      self.registration.showNotification(title, {
+        body,
+        icon:     '/icon-192x192.png',
+        badge:    '/badge-72x72.png',
+        tag,
+        renotify: true,
+        data: { url },
+      })
+    })
+  } catch (e) {
+    console.warn('[FCM SW] Could not set up messaging:', e)
+  }
+}
 
 // Notification click — navigate to the relevant page
 self.addEventListener('notificationclick', (event) => {
@@ -48,16 +72,24 @@ self.addEventListener('notificationclick', (event) => {
     clients
       .matchAll({ type: 'window', includeUncontrolled: true })
       .then((clientList) => {
-        // If the app is already open, focus it and navigate
         for (const client of clientList) {
           if ('focus' in client) {
             client.focus()
-            client.navigate(url)
+            if ('navigate' in client) client.navigate(url)
             return
           }
         }
-        // Otherwise open a new window
         if (clients.openWindow) return clients.openWindow(url)
       })
   )
+})
+
+// Periodically try to set up messaging once config is received
+self.addEventListener('activate', () => {
+  const interval = setInterval(() => {
+    setupMessaging()
+    if (_messagingSetup) clearInterval(interval)
+  }, 500)
+  // Stop trying after 10 seconds if config never arrives
+  setTimeout(() => clearInterval(interval), 10000)
 })

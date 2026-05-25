@@ -208,7 +208,7 @@ export function TransactionDetailClient() {
               <span>Shipping Fee</span><span>₦{transaction.shippingFee.toLocaleString()}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
-              <span>Platform Fee (5%)</span><span>₦{transaction.platformFee.toLocaleString()}</span>
+              <span>Platform Fee (2.5% + ₦100)</span><span>₦{transaction.platformFee.toLocaleString()}</span>
             </div>
             <div className="flex justify-between font-bold text-base border-t border-border pt-3 mt-1">
               <span>Grand Total</span>

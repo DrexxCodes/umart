@@ -21,8 +21,8 @@ interface PricingSummaryProps {
   buyerName: string | null
 }
 
-const PLATFORM_FEE_PERCENTAGE = 0.05
-const PLATFORM_FEE_BASE = 300
+const PLATFORM_FEE_PERCENTAGE = 0.025
+const PLATFORM_FEE_BASE = 100
 
 export function PricingSummary({
   items,
@@ -60,8 +60,8 @@ export function PricingSummary({
           type="number"
           min="0"
           step="0.01"
-          value={shippingFee}
-          onChange={(e) => onShippingFeeChange(parseFloat(e.target.value) || 0)}
+          value={shippingFee === 0 ? '' : shippingFee}
+          onChange={(e) => onShippingFeeChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
           placeholder="0.00"
         />
       </div>
@@ -114,7 +114,7 @@ export function PricingSummary({
 
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">
-              Platform Fee (5% + ₦300)
+              Platform Fee (2.5% + ₦100)
               {!buyerBearsBurden && (
                 <span className="ml-1 text-xs text-yellow-600">(deducted from your payout)</span>
               )}

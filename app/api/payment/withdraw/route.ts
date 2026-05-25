@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore'
-import { createRecipient, initiateTransfer } from '@/lib/paystack'
 import { rateLimit, getClientIp } from '@/lib/rate-limit'
 
 // ── GET ───────────────────────────────────────────────────────────────────────
@@ -61,7 +60,8 @@ export async function GET(req: NextRequest) {
         status:        data.status,
         payoutAmount:  data.payoutAmount,
         pendingAt:     data.pendingAt,
-        paidAt:        data.paidAt ?? null,
+        paidAt:        data.paidAt       ?? null,
+        completedAt:   data.completedAt  ?? null,
       },
     })
   } catch (error: any) {
@@ -74,6 +74,9 @@ export async function GET(req: NextRequest) {
 }
 
 // ── POST ──────────────────────────────────────────────────────────────────────
+// Queues a withdrawal request. Does NOT initiate a Paystack transfer —
+// that is now done manually by the admin via the pay-queue dashboard.
+// Does NOT mark reference.withdrawn = true until admin sets status = 'completed'.
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req)
   const rl = rateLimit(`withdraw:${ip}`, { limit: 5, windowSeconds: 60 })
@@ -110,7 +113,13 @@ export async function POST(req: NextRequest) {
       const existing = existingDoc.data()!
       return NextResponse.json({
         success: true,
-        data: { status: existing.status, payoutAmount: existing.payoutAmount, pendingAt: existing.pendingAt, paidAt: existing.paidAt ?? null },
+        data: {
+          status:       existing.status,
+          payoutAmount: existing.payoutAmount,
+          pendingAt:    existing.pendingAt,
+          paidAt:       existing.paidAt       ?? null,
+          completedAt:  existing.completedAt  ?? null,
+        },
       })
     }
 
@@ -131,15 +140,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid payout amount' }, { status: 400 })
     }
 
-    const productName   = refData.items?.[0]?.productName ?? 'your order'
-    const transferReason = `Payment for ${productName}`
-
-    // ── Resolve bank account ──────────────────────────────────────────────────
+    // ── Resolve bank account details ──────────────────────────────────────────
     let resolvedBankCode      = bankCode
     let resolvedBankName      = bankName
     let resolvedAccountNumber = accountNumber
     let resolvedAccountName   = accountName
-    let resolvedRecipientCode: string | null = null
     let bankInfoRef: string | null = null
 
     if (savedAccountId) {
@@ -152,7 +157,6 @@ export async function POST(req: NextRequest) {
       resolvedBankName      = saved.bankName
       resolvedAccountNumber = saved.accountNumber
       resolvedAccountName   = saved.accountName
-      resolvedRecipientCode = saved.recipientCode ?? null
       bankInfoRef           = savedAccountId
     } else {
       if (!bankCode || !bankName || !accountNumber || !accountName) {
@@ -164,6 +168,7 @@ export async function POST(req: NextRequest) {
       if (accountNumber.length !== 10) {
         return NextResponse.json({ success: false, error: 'Account number must be 10 digits' }, { status: 400 })
       }
+      // Save bank info for future use (no recipientCode yet — created by admin at payout time)
       const newBankRef = adminDb.collection('bankInfo').doc()
       bankInfoRef = newBankRef.id
       await newBankRef.set({
@@ -177,59 +182,29 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    if (!resolvedRecipientCode) {
-      const recipient = await createRecipient({
-        name:          resolvedAccountName,
-        accountNumber: resolvedAccountNumber,
-        bankCode:      resolvedBankCode,
-      })
-      resolvedRecipientCode = recipient.recipient_code
-      if (bankInfoRef) {
-        await adminDb.collection('bankInfo').doc(bankInfoRef).update({ recipientCode: resolvedRecipientCode })
-      }
-    }
+    const sellerDoc = await adminDb.collection('users').doc(sellerId).get()
+    const sellerData = sellerDoc.data() ?? {}
 
-    const transferRef = `withdraw-${refId}-${Date.now()}`
-    const transfer = await initiateTransfer({
-      recipientCode: resolvedRecipientCode,
-      amount:        payoutAmount * 100,
-      reference:     transferRef,
-      reason:        transferReason,
-    })
-
-    // ── Atomic batch: create payQueue + mark reference as withdrawn ───────────
-    // NOTE: Analytics (totalWithdrawn) are intentionally NOT updated here.
-    // They are updated atomically inside the Paystack transfer.success webhook
-    // handler, ensuring stats only reflect confirmed payouts.
-    const batch = adminDb.batch()
-
-    batch.set(adminDb.collection('payQueue').doc(refId), {
+    // ── Write payQueue entry — no transfer initiated, no withdrawn flag set ───
+    await adminDb.collection('payQueue').doc(refId).set({
       refId,
       sellerId,
-      buyerId:           refData.buyerId,
+      buyerId:         refData.buyerId,
       payoutAmount,
-      bankCode:          resolvedBankCode,
-      bankName:          resolvedBankName,
-      accountNumber:     resolvedAccountNumber,
-      accountName:       resolvedAccountName,
+      bankCode:        resolvedBankCode,
+      bankName:        resolvedBankName,
+      accountNumber:   resolvedAccountNumber,
+      accountName:     resolvedAccountName,
       bankInfoRef,
-      recipientCode:     resolvedRecipientCode,
-      transferCode:      transfer.transfer_code,
-      transferStatus:    transfer.status,
-      reason:            transferReason,
-      status:            'pending',
-      pendingAt:         FieldValue.serverTimestamp(),
-      paidAt:            null,
-      createdAt:         FieldValue.serverTimestamp(),
-      updatedAt:         FieldValue.serverTimestamp(),
+      sellerName:      sellerData.fullname ?? sellerData.displayName ?? null,
+      sellerEmail:     sellerData.email ?? null,
+      // status lifecycle: pending → processing → completed
+      status:          'pending',
+      pendingAt:       FieldValue.serverTimestamp(),
+      completedAt:     null,
+      createdAt:       FieldValue.serverTimestamp(),
+      updatedAt:       FieldValue.serverTimestamp(),
     })
-
-    batch.update(adminDb.collection('references').doc(refId), {
-      withdrawn:  true,
-      updatedAt:  FieldValue.serverTimestamp(),
-    })
-
-    await batch.commit()
 
     return NextResponse.json(
       {
@@ -238,8 +213,7 @@ export async function POST(req: NextRequest) {
           status:       'pending',
           payoutAmount,
           pendingAt:    new Date().toISOString(),
-          paidAt:       null,
-          transferCode: transfer.transfer_code,
+          completedAt:  null,
         },
       },
       { status: 201 }
