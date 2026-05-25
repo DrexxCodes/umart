@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Loader2, ArrowRight, CheckCircle, ShieldCheck, XCircle, ShieldAlert, Star } from 'lucide-react'
 import { BuyerNav } from '@/components/nav/buyer-nav'
-import { PaymentButton } from '@/components/payment'
+import { PaymentButton, AlreadyPaid } from '@/components/payment'
+import { ReviewDialog } from '@/components/review-dialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,160 +40,6 @@ interface Transaction {
   createdAt: any
 }
 
-// Review dialog
-interface ReviewDialogProps {
-  transaction: Transaction
-  onClose: () => void
-  onSubmitted: () => void
-}
-
-function StarRating({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const [hovered, setHovered] = useState(0)
-  return (
-    <div className="flex gap-1">
-      {[1, 2, 3, 4, 5].map((star) => (
-        <button
-          key={star}
-          type="button"
-          onMouseEnter={() => setHovered(star)}
-          onMouseLeave={() => setHovered(0)}
-          onClick={() => onChange(star)}
-          className="transition-transform hover:scale-110"
-        >
-          <Star
-            size={28}
-            className={`transition-colors ${
-              (hovered || value) >= star
-                ? 'text-amber-400 fill-amber-400'
-                : 'text-muted-foreground'
-            }`}
-          />
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function ReviewDialog({ transaction, onClose, onSubmitted }: ReviewDialogProps) {
-  const [topic, setTopic] = useState('')
-  const [description, setDescription] = useState('')
-  const [rating, setRating] = useState(0)
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = '' }
-  }, [])
-
-  const handleSubmit = async () => {
-    if (rating === 0) { setError('Please select a star rating.'); return }
-    try {
-      setSubmitting(true)
-      setError('')
-      const user = auth.currentUser
-      if (!user) { setError('You must be signed in.'); return }
-      const token = await user.getIdToken()
-
-      const res = await fetch('/api/catalogue/review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          txnRefId: transaction.refId,
-          sellerId: transaction.sellerId,
-          rating,
-          topic: topic.trim(),
-          description: description.trim(),
-          productNames: transaction.items.map((i) => i.productName),
-        }),
-      })
-      const result = await res.json()
-      if (!result.success) throw new Error(result.error || 'Failed to submit review')
-      onSubmitted()
-    } catch (err: any) {
-      setError(err.message || 'An error occurred')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="w-full max-w-md overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:rounded-2xl max-h-[95vh] flex flex-col">
-        <div className="flex items-center justify-between border-b border-border px-5 py-4 shrink-0">
-          <div>
-            <h2 className="text-sm font-bold text-foreground">Review this seller and the item</h2>
-            <p className="text-[10px] font-mono text-muted-foreground">{transaction.refId}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors text-lg"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="overflow-y-auto px-5 py-5 space-y-5 flex-1">
-          {/* Star rating */}
-          <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Star Rating <span className="text-destructive">*</span>
-            </label>
-            <StarRating value={rating} onChange={setRating} />
-          </div>
-
-          {/* Review topic */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Review Topic <span className="text-muted-foreground/60 font-normal">(optional)</span>
-            </label>
-            <input
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g. Great seller, Fast delivery..."
-              maxLength={120}
-              className="w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20 transition-all"
-            />
-          </div>
-
-          {/* Description */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Description <span className="text-muted-foreground/60 font-normal">(optional)</span>
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Tell others about your experience..."
-              rows={3}
-              maxLength={1000}
-              className="w-full resize-none rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20 transition-all"
-            />
-          </div>
-
-          {error && <p className="text-xs text-destructive">{error}</p>}
-        </div>
-
-        <div className="flex gap-3 border-t border-border px-5 py-4 shrink-0">
-          <Button variant="outline" className="flex-1" onClick={onClose} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button
-            className="flex-1 gap-2"
-            onClick={handleSubmit}
-            disabled={rating === 0 || submitting}
-          >
-            {submitting ? <><Loader2 size={14} className="animate-spin" />Submitting…</> : <><Star size={14} />Submit Review</>}
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 type PayDialogScreen = 'confirm' | 'loading' | 'closed'
 
 export function TransactionsClient() {
@@ -208,6 +55,8 @@ export function TransactionsClient() {
   const [confirmingValue, setConfirmingValue] = useState(false)
   const [reviewTransaction, setReviewTransaction] = useState<Transaction | null>(null)
   const [reviewedRefs, setReviewedRefs] = useState<Set<string>>(new Set())
+  // UX: track which transaction the user clicked so we can show a row-level spinner
+  const [navigatingTo, setNavigatingTo] = useState<string | null>(null)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -239,6 +88,13 @@ export function TransactionsClient() {
     }
     fetchTransactions()
   }, [isAuthenticated])
+
+  // Updates a single transaction's status in state — used by AlreadyPaid
+  const syncTransactionStatus = (refId: string, status: string) => {
+    setTransactions((prev) =>
+      prev.map((t) => t.refId === refId ? { ...t, status } : t)
+    )
+  }
 
   const handleConfirmValue = async () => {
     if (!selectedTransaction) return
@@ -282,6 +138,11 @@ export function TransactionsClient() {
     setSelectedTransaction(transaction)
     setPayScreen('confirm')
     setPayDialogOpen(true)
+  }
+
+  const handleRowClick = (refId: string) => {
+    setNavigatingTo(refId)
+    router.push(`/transactions/${refId}`)
   }
 
   const formatDate = (timestamp: any) => {
@@ -351,6 +212,7 @@ export function TransactionsClient() {
             {transactions.map((transaction) => {
               const isDisputing = transaction.status === 'disputing'
               const hasConfirmedValue = transaction.valueReceived || transaction.confirmedValue
+              const isNavigating = navigatingTo === transaction.refId
               return (
                 <Card
                   key={transaction.refId}
@@ -358,9 +220,16 @@ export function TransactionsClient() {
                 >
                   <div className="flex items-start justify-between">
                     <div
-                      className="flex-1 cursor-pointer min-w-0"
-                      onClick={() => router.push(`/transactions/${transaction.refId}`)}
+                      className="flex-1 cursor-pointer min-w-0 relative"
+                      onClick={() => handleRowClick(transaction.refId)}
                     >
+                      {/* Loading overlay on the clickable area */}
+                      {isNavigating && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-background/60 rounded-lg z-10">
+                          <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                        </div>
+                      )}
+
                       <div className="flex flex-wrap items-center gap-2 mb-3">
                         <h3 className="text-lg font-semibold truncate">
                           Ref: {transaction.refId}
@@ -399,9 +268,16 @@ export function TransactionsClient() {
                     {/* Action buttons */}
                     <div className="ml-4 flex flex-col items-end gap-2 shrink-0">
                       {transaction.status === 'pending' && (
-                        <Button size="sm" onClick={(e) => openPayDialog(transaction, e)}>
-                          Pay Now
-                        </Button>
+                        <>
+                          <Button size="sm" onClick={(e) => openPayDialog(transaction, e)}>
+                            Pay Now
+                          </Button>
+                          <AlreadyPaid
+                            refId={transaction.refId}
+                            onConfirmed={() => syncTransactionStatus(transaction.refId, 'paid')}
+                            onFailed={() => syncTransactionStatus(transaction.refId, 'failed')}
+                          />
+                        </>
                       )}
 
                       {transaction.status === 'paid' && !isDisputing && (
@@ -422,7 +298,6 @@ export function TransactionsClient() {
                         </span>
                       )}
 
-                      {/* Review button — show if value confirmed */}
                       {hasConfirmedValue && !reviewedRefs.has(transaction.refId) && (
                         <Button
                           variant="outline"
@@ -533,11 +408,26 @@ export function TransactionsClient() {
                   Payment Window Closed
                 </AlertDialogTitle>
                 <AlertDialogDescription asChild>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <p className="text-sm text-muted-foreground">
                       Looks like you closed the payment popup without completing payment.
                       Your order is still saved, you can pay anytime from your transactions.
                     </p>
+                    {selectedTransaction && (
+                      <div className="flex justify-center pt-1">
+                        <AlreadyPaid
+                          refId={selectedTransaction.refId}
+                          onConfirmed={() => {
+                            syncTransactionStatus(selectedTransaction.refId, 'paid')
+                            setPayDialogOpen(false)
+                          }}
+                          onFailed={() => {
+                            syncTransactionStatus(selectedTransaction.refId, 'failed')
+                            setPayDialogOpen(false)
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                 </AlertDialogDescription>
               </AlertDialogHeader>

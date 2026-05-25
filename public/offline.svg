@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none">
+  <!-- Background blob -->
+  <ellipse cx="200" cy="220" rx="160" ry="30" fill="#e2e8f0" opacity="0.5"/>
+
+  <!-- WiFi tower (sad) -->
+  <rect x="188" y="120" width="24" height="80" rx="4" fill="#94a3b8"/>
+  <rect x="178" y="190" width="44" height="10" rx="3" fill="#64748b"/>
+
+  <!-- Crossed out WiFi waves -->
+  <path d="M200 110 Q230 85 260 100" stroke="#cbd5e1" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M200 110 Q170 85 140 100" stroke="#cbd5e1" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M200 95  Q245 60 285 80"  stroke="#e2e8f0" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M200 95  Q155 60 115 80"  stroke="#e2e8f0" stroke-width="8" stroke-linecap="round" fill="none"/>
+
+  <!-- Big X over the wifi -->
+  <line x1="145" y1="55" x2="255" y2="145" stroke="#f87171" stroke-width="10" stroke-linecap="round"/>
+  <line x1="255" y1="55" x2="145" y2="145" stroke="#f87171" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Sad face on tower -->
+  <circle cx="200" cy="108" r="18" fill="#fbbf24"/>
+  <circle cx="194" cy="104" r="2.5" fill="#92400e"/>
+  <circle cx="206" cy="104" r="2.5" fill="#92400e"/>
+  <path d="M194 114 Q200 110 206 114" stroke="#92400e" stroke-width="2" stroke-linecap="round" fill="none"/>
+</svg>

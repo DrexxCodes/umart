@@ -8,6 +8,7 @@ import { ChatList } from '@/app/chat/components/ChatList'
 import { ChatArea } from '@/app/chat/components/ChatArea'
 import { ChevronLeft, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { FcmPermissionPrompt } from '@/components/fcm-permission-prompt'
 import { Card } from '@/components/ui/card'
 
 export function CreatorChatClient() {
@@ -128,6 +129,7 @@ export function CreatorChatClient() {
           <ChatArea chatId={selectedChatId} showTakeoverButton />
         </div>
       </div>
+      <FcmPermissionPrompt />
     </div>
   )
 }

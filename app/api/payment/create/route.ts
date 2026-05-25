@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { sendPushToUser } from '@/lib/fcm'
 import { rateLimit, getClientIp } from '@/lib/rate-limit'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
 import { Timestamp, FieldValue } from 'firebase-admin/firestore'
 
-const PLATFORM_FEE_PERCENTAGE = 0.05
-const PLATFORM_FEE_BASE = 300
+const PLATFORM_FEE_PERCENTAGE = 0.025
+const PLATFORM_FEE_BASE = 100
 
 interface InvoiceItem {
   productId: string
@@ -214,7 +215,18 @@ export async function POST(req: NextRequest) {
       console.error('Error updating invoice analytics:', analyticsError)
     }
 
-    return NextResponse.json(
+
+    // ── Notify buyer via push notification ────────────────────────────────────
+    // Fire-and-forget — don't let a notification failure break invoice creation
+    sendPushToUser(buyerId, {
+      title: 'New Invoice from your seller',
+      body: `${sellerDoc.data()?.fullname || 'Your seller'} has created an invoice for ₦${grandPrice.toLocaleString()}. Tap to view.`,
+      url: '/transactions',
+      tag: `invoice_${refId}`,
+      data: { refId },
+    }).catch((err) => console.error('[payment/create] FCM push failed:', err))
+
+        return NextResponse.json(
       { success: true, data: transactionData },
       { status: 201 }
     )

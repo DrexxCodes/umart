@@ -9,6 +9,7 @@ import { Loader2 } from 'lucide-react'
 import { ChatSenderBubble } from './ChatSenderBubble'
 import { ChatRecipientBubble } from './ChatRecipientBubble'
 import { ChatBox } from './ChatBox'
+import { ChatParticipantEmails, type ParticipantInfo } from '@/components/chat-participant-emails'
 
 interface Message {
   id: string
@@ -45,6 +46,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [messageSending, setMessageSending] = useState(false)
   const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null)
+  const [participants, setParticipants] = useState<ParticipantInfo[]>([])
   const [takeoverLoading, setTakeoverLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const lastMessageCountRef = useRef(0)
@@ -59,6 +61,30 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
     })
     return () => unsubscribe()
   }, [])
+
+  // Fetch participants (emails) once when chatId changes
+  useEffect(() => {
+    if (!chatId) { setParticipants([]); return }
+
+    const fetchParticipants = async () => {
+      try {
+        const user = auth.currentUser
+        if (!user) return
+        const token = await user.getIdToken()
+        const res = await fetch(`/api/chat/${chatId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const result = await res.json()
+        if (result.success && result.data.participants) {
+          setParticipants(result.data.participants)
+        }
+      } catch {
+        // Non-critical — emails just won't show
+      }
+    }
+
+    fetchParticipants()
+  }, [chatId])
 
   useEffect(() => {
     if (!chatId) {
@@ -78,24 +104,20 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
         setError('')
 
         const user = auth.currentUser
-        if (!user) {
-          setError('You must be logged in')
-          setLoading(false)
-          return
-        }
+        if (!user) { setError('You must be logged in'); setLoading(false); return }
 
         const chatDocRef = doc(db, 'chats', chatId)
         unsubscribeChat = onSnapshot(
           chatDocRef,
           (chatDoc) => {
             if (chatDoc.exists()) {
-              const chatData = chatDoc.data()
+              const data = chatDoc.data()
               setChatInfo({
-                productId: chatData?.productId,
-                productName: chatData?.productName,
-                aiEnabled: chatData?.aiEnabled ?? false,
-                humanTookOver: chatData?.humanTookOver ?? false,
-                creatorId: chatData?.creatorId,
+                productId: data?.productId,
+                productName: data?.productName,
+                aiEnabled: data?.aiEnabled ?? false,
+                humanTookOver: data?.humanTookOver ?? false,
+                creatorId: data?.creatorId,
               })
             } else {
               setError('Chat not found')
@@ -163,28 +185,18 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
 
   const handleSendMessage = async (text: string) => {
     if (!chatId || !text.trim()) return
-
     try {
       setMessageSending(true)
       const user = auth.currentUser
       if (!user) return
-
       const token = await user.getIdToken()
-
       const response = await fetch('/api/chat/send', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ chatId, text }),
       })
-
       const result = await response.json()
-      if (!result.success) {
-        console.error('Failed to send message:', result.error)
-        setError('Failed to send message')
-      }
+      if (!result.success) { console.error('Failed to send:', result.error); setError('Failed to send message') }
     } catch (error) {
       console.error('Error sending message:', error)
       setError('Failed to send message')
@@ -200,20 +212,13 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       const user = auth.currentUser
       if (!user) return
       const token = await user.getIdToken()
-
       const response = await fetch('/api/chat/takeover', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ chatId }),
       })
-
       const result = await response.json()
-      if (!result.success) {
-        setError(result.error || 'Failed to take over chat')
-      }
+      if (!result.success) setError(result.error || 'Failed to take over chat')
     } catch (err) {
       console.error('Takeover error:', err)
       setError('Failed to take over chat')
@@ -229,16 +234,11 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       const user = auth.currentUser
       if (!user) return
       const token = await user.getIdToken()
-
       const response = await fetch('/api/chat/takeover', {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ chatId }),
       })
-
       const result = await response.json()
       if (!result.success) setError(result.error || 'Failed to hand back to AI')
     } catch (err) {
@@ -269,46 +269,53 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
     )
   }
 
-  const isAIActive = chatInfo?.aiEnabled && !chatInfo?.humanTookOver
+  const isAIActive   = chatInfo?.aiEnabled && !chatInfo?.humanTookOver
   const isHumanActive = chatInfo?.aiEnabled && chatInfo?.humanTookOver
 
   return (
     <div className="flex flex-col h-full">
-      {/* Takeover banner — only shown in creator chat when AI is enabled */}
-      {showTakeoverButton && chatInfo?.aiEnabled && (
-        <div
-          className={`flex items-center justify-between px-4 py-2 text-sm border-b ${
+      {/* ── Top bar: AI takeover + View Emails ─────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border gap-2 shrink-0">
+        {/* AI banner */}
+        {showTakeoverButton && chatInfo?.aiEnabled ? (
+          <div className={`flex items-center gap-2 text-sm rounded-lg px-3 py-1.5 flex-1 ${
             isAIActive
-              ? 'bg-violet-50 dark:bg-violet-950/30 border-violet-200 dark:border-violet-800'
-              : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
-          }`}
-        >
-          <span
-            className={`font-medium ${
-              isAIActive ? 'text-violet-700 dark:text-violet-300' : 'text-amber-700 dark:text-amber-300'
-            }`}
-          >
-            {isAIActive ? '🤖 Clara is negotiating for you' : '👤 You are in control'}
-          </span>
-          {isAIActive ? (
-            <button
-              onClick={handleTakeover}
-              disabled={takeoverLoading}
-              className="text-xs bg-violet-600 hover:bg-violet-700 text-white px-3 py-1 rounded-full transition-colors disabled:opacity-50"
-            >
-              {takeoverLoading ? 'Taking over...' : 'Take Over'}
-            </button>
-          ) : (
-            <button
-              onClick={handleHandBackToAI}
-              disabled={takeoverLoading}
-              className="text-xs bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded-full transition-colors disabled:opacity-50"
-            >
-              {takeoverLoading ? 'Handing back...' : 'Hand Back to AI'}
-            </button>
-          )}
-        </div>
-      )}
+              ? 'bg-violet-50 dark:bg-violet-950/30'
+              : 'bg-amber-50 dark:bg-amber-950/30'
+          }`}>
+            <span className={`font-medium text-xs ${isAIActive ? 'text-violet-700 dark:text-violet-300' : 'text-amber-700 dark:text-amber-300'}`}>
+              {isAIActive ? '🤖 Clara is negotiating for you' : '👤 You are in control'}
+            </span>
+            {isAIActive ? (
+              <button
+                onClick={handleTakeover}
+                disabled={takeoverLoading}
+                className="ml-auto text-xs bg-violet-600 hover:bg-violet-700 text-white px-2 py-0.5 rounded-full transition-colors disabled:opacity-50"
+              >
+                {takeoverLoading ? 'Taking over...' : 'Take Over'}
+              </button>
+            ) : (
+              <button
+                onClick={handleHandBackToAI}
+                disabled={takeoverLoading}
+                className="ml-auto text-xs bg-amber-600 hover:bg-amber-700 text-white px-2 py-0.5 rounded-full transition-colors disabled:opacity-50"
+              >
+                {takeoverLoading ? 'Handing back...' : 'Hand Back to AI'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1" />
+        )}
+
+        {/* View Emails button — always shown when participants are loaded */}
+        {participants.length > 0 && (
+          <ChatParticipantEmails
+            participants={participants}
+            currentUserId={currentUserId}
+          />
+        )}
+      </div>
 
       <div className="flex-1 overflow-y-auto space-y-4 p-4">
         <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 mb-4">
@@ -328,9 +335,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
           </div>
         )}
 
-        {error && (
-          <div className="text-center text-destructive text-sm mb-4">{error}</div>
-        )}
+        {error && <div className="text-center text-destructive text-sm mb-4">{error}</div>}
 
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
@@ -339,7 +344,6 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
         ) : (
           messages.map((message) => {
             const messageDate = convertToDate(message.createdAt)
-
             return (
               <div key={message.id}>
                 {message.senderId === currentUserId ? (

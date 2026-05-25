@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Loader2, ChevronLeft, CheckCircle, Clock, XCircle, ShieldAlert, Star } from 'lucide-react'
 import { BuyerNav } from '@/components/nav/buyer-nav'
+import { ReviewDialog } from '@/components/review-dialog'
+import { AlreadyPaid } from '@/components/payment'
 
 interface TransactionDetail {
   refId: string
@@ -27,143 +29,6 @@ interface TransactionDetail {
   confirmedValue: boolean
   createdAt: any
   updatedAt: any
-}
-
-// ── Star rating picker ────────────────────────────────────────────────────────
-function StarRating({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const [hovered, setHovered] = useState(0)
-  return (
-    <div className="flex gap-1">
-      {[1, 2, 3, 4, 5].map((star) => (
-        <button
-          key={star}
-          type="button"
-          onMouseEnter={() => setHovered(star)}
-          onMouseLeave={() => setHovered(0)}
-          onClick={() => onChange(star)}
-          className="transition-transform hover:scale-110"
-        >
-          <Star
-            size={28}
-            className={`transition-colors ${
-              (hovered || value) >= star ? 'text-amber-400 fill-amber-400' : 'text-muted-foreground'
-            }`}
-          />
-        </button>
-      ))}
-    </div>
-  )
-}
-
-// ── Review dialog ─────────────────────────────────────────────────────────────
-function ReviewDialog({
-  transaction,
-  onClose,
-  onSubmitted,
-}: {
-  transaction: TransactionDetail
-  onClose: () => void
-  onSubmitted: () => void
-}) {
-  const [topic, setTopic] = useState('')
-  const [description, setDescription] = useState('')
-  const [rating, setRating] = useState(0)
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = '' }
-  }, [])
-
-  const handleSubmit = async () => {
-    if (rating === 0) { setError('Please select a star rating.'); return }
-    try {
-      setSubmitting(true)
-      setError('')
-      const user = auth.currentUser
-      if (!user) { setError('You must be signed in.'); return }
-      const token = await user.getIdToken()
-      const res = await fetch('/api/catalogue/review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          txnRefId: transaction.refId,
-          sellerId: transaction.sellerId,
-          rating,
-          topic: topic.trim(),
-          description: description.trim(),
-          productNames: transaction.items.map((i) => i.productName),
-        }),
-      })
-      const result = await res.json()
-      if (!result.success) throw new Error(result.error || 'Failed to submit review')
-      onSubmitted()
-    } catch (err: any) {
-      setError(err.message || 'An error occurred')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="w-full max-w-md overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:rounded-2xl max-h-[95vh] flex flex-col">
-        <div className="flex items-center justify-between border-b border-border px-5 py-4 shrink-0">
-          <div>
-            <h2 className="text-sm font-bold text-foreground">Review this seller and the item</h2>
-            <p className="text-[10px] font-mono text-muted-foreground">{transaction.refId}</p>
-          </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors text-lg">
-            ×
-          </button>
-        </div>
-        <div className="overflow-y-auto px-5 py-5 space-y-5 flex-1">
-          <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Star Rating <span className="text-destructive">*</span>
-            </label>
-            <StarRating value={rating} onChange={setRating} />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Review Topic <span className="text-muted-foreground/60 font-normal">(optional)</span>
-            </label>
-            <input
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g. Great seller, Fast delivery..."
-              maxLength={120}
-              className="w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20 transition-all"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Description <span className="text-muted-foreground/60 font-normal">(optional)</span>
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Tell others about your experience..."
-              rows={3}
-              maxLength={1000}
-              className="w-full resize-none rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20 transition-all"
-            />
-          </div>
-          {error && <p className="text-xs text-destructive">{error}</p>}
-        </div>
-        <div className="flex gap-3 border-t border-border px-5 py-4 shrink-0">
-          <Button variant="outline" className="flex-1" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button className="flex-1 gap-2" onClick={handleSubmit} disabled={rating === 0 || submitting}>
-            {submitting ? <><Loader2 size={14} className="animate-spin" />Submitting…</> : <><Star size={14} />Submit Review</>}
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -297,6 +162,8 @@ export function TransactionDetailClient() {
   const hasConfirmedValue = transaction.valueReceived || transaction.confirmedValue
   const canConfirm = transaction.status === 'paid' && !hasConfirmedValue && !isDisputing
 
+  const syncStatus = (status: string) => setTransaction((prev) => prev ? { ...prev, status } : null)
+
   return (
     <div className="min-h-screen bg-background">
       <BuyerNav />
@@ -356,6 +223,17 @@ export function TransactionDetailClient() {
           <p className="text-sm text-muted-foreground mb-4">
             Confirm only after you have received your items and are satisfied. This releases payment to the seller.
           </p>
+
+          {transaction.status === 'pending' && (
+            <div className="flex flex-col items-center gap-2 mb-4">
+              <p className="text-sm text-muted-foreground">Payment not completed yet.</p>
+              <AlreadyPaid
+                refId={transaction.refId}
+                onConfirmed={() => syncStatus('paid')}
+                onFailed={() => syncStatus('failed')}
+              />
+            </div>
+          )}
 
           {isDisputing ? (
             <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/25 bg-amber-500/8 px-4 py-3">

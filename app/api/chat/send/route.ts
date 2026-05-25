@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
+import { upsertPendingChatNotification } from '@/lib/fcm'
 
 export async function POST(req: NextRequest) {
   try {
@@ -8,10 +9,7 @@ export async function POST(req: NextRequest) {
     const authHeader = req.headers.get('authorization')
 
     if (!authHeader || !chatId || !text) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required fields' },
-        { status: 400 }
-      )
+      return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 })
     }
 
     const token = authHeader.replace('Bearer ', '')
@@ -19,20 +17,13 @@ export async function POST(req: NextRequest) {
     const userId = decodedToken.uid
 
     const chatSnapshot = await adminDb.collection('chats').doc(chatId).get()
-
     if (!chatSnapshot.exists) {
-      return NextResponse.json(
-        { success: false, error: 'Chat not found' },
-        { status: 404 }
-      )
+      return NextResponse.json({ success: false, error: 'Chat not found' }, { status: 404 })
     }
 
-    const chatData = chatSnapshot.data()
-    if (!chatData?.participantIds.includes(userId)) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 403 }
-      )
+    const chatData = chatSnapshot.data()!
+    if (!chatData.participantIds.includes(userId)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
     }
 
     const senderDoc = await adminDb.collection('users').doc(userId).get()
@@ -40,17 +31,12 @@ export async function POST(req: NextRequest) {
     const senderRoles = senderDoc.data()?.roles || {}
     const isCreator = senderRoles.isCreator || false
 
-    const messageRef = adminDb
-      .collection('chats')
-      .doc(chatId)
-      .collection('messages')
-      .doc()
-
+    const messageRef = adminDb.collection('chats').doc(chatId).collection('messages').doc()
     const batch = adminDb.batch()
 
     batch.set(messageRef, {
       senderId: userId,
-      senderName: senderName,
+      senderName,
       text: text.trim(),
       createdAt: Timestamp.now(),
       isSystemAdmin: senderRoles.isAdmin || false,
@@ -67,20 +53,44 @@ export async function POST(req: NextRequest) {
 
     await batch.commit()
 
-    // Fire AI reply for buyer messages (non-blocking)
-    // Only trigger if the sender is NOT the creator and NOT an admin
+    // ── AI reply (non-blocking) ────────────────────────────────────────────
     if (!isCreator && !senderRoles.isAdmin) {
-      const aiEnabled = chatData?.aiEnabled ?? false
-      const humanTookOver = chatData?.humanTookOver ?? false
-
+      const aiEnabled = chatData.aiEnabled ?? false
+      const humanTookOver = chatData.humanTookOver ?? false
       if (aiEnabled && !humanTookOver) {
-        // Fire and forget — don't await so buyer gets instant ack
         fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/chat/ai-reply`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chatId, buyerMessage: text.trim() }),
         }).catch((err) => console.error('AI reply trigger failed:', err))
       }
+    }
+
+    // ── Push notification (non-blocking, 30-second debounce) ───────────────
+    // Find the recipient (the other participant)
+    const recipientId = chatData.participantIds.find((id: string) => id !== userId)
+    if (recipientId) {
+      // Upsert the pending counter — returns the current accumulated count
+      const notifDocId = `${chatId}_${recipientId}`
+      upsertPendingChatNotification(chatId, recipientId, userId, senderName)
+        .then((count) => {
+          // Only schedule the notify call on the FIRST message in the window.
+          // Subsequent messages just bump the counter; the scheduled call
+          // reads the final count when it fires 30s after the first message.
+          if (count === 1) {
+            setTimeout(() => {
+              fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/chat/notify`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-internal-secret': process.env.INTERNAL_API_SECRET || '',
+                },
+                body: JSON.stringify({ notifDocId }),
+              }).catch((err) => console.error('Chat notify trigger failed:', err))
+            }, 30_000)
+          }
+        })
+        .catch((err) => console.error('upsertPendingChatNotification failed:', err))
     }
 
     return NextResponse.json(
@@ -97,9 +107,6 @@ export async function POST(req: NextRequest) {
     )
   } catch (error: any) {
     console.error('Error sending message:', error)
-    return NextResponse.json(
-      { success: false, error: error.message || 'Failed to send message' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: false, error: error.message || 'Failed to send message' }, { status: 500 })
   }
 }

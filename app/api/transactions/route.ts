@@ -124,16 +124,22 @@ export async function GET(req: NextRequest) {
         return {
           refId: d.refId,
           type,
+          sellerId: d.sellerId,           // needed for review submission
+          buyerId: d.buyerId,
           buyerName: d.buyerName ?? null,
           buyerEmail: d.buyerEmail ?? null,
           buyerPhone: d.buyerPhone ?? null,
           items: d.items ?? [],
+          itemsTotal: d.itemsTotal ?? 0,
+          shippingFee: d.shippingFee ?? 0,
+          platformFee: d.platformFee ?? 0,
           grandPrice: d.grandPrice ?? 0,
           buyerBearsBurden: d.buyerBearsBurden ?? true,
           status: d.status ?? null,
           valueReceived: d.valueReceived ?? false,
           withdrawn: d.withdrawn ?? false,
           confirmedValue: d.confirmedValue ?? false,
+          createdAt: d.createdAt,         // needed for date display on list
         }
       })
       .filter(Boolean)

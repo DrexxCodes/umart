@@ -8,6 +8,7 @@ import { ChatList } from './components/ChatList'
 import { ChatArea } from './components/ChatArea'
 import { ChevronLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { FcmPermissionPrompt } from '@/components/fcm-permission-prompt'
 
 export function ChatClient() {
   const router = useRouter()
