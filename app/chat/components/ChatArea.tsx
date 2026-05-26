@@ -1,10 +1,13 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
-import { collection, query, orderBy, onSnapshot, doc } from 'firebase/firestore'
+import {
+  collection, query, orderBy, onSnapshot, doc,
+  startAfter, limit, getDocs, type QueryDocumentSnapshot,
+} from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
-import { convertToDate } from '@/lib/timestamp'
+import { convertToDate, getChatDayLabel, getDayKey } from '@/lib/timestamp'
 import { Loader2 } from 'lucide-react'
 import { ChatSenderBubble } from './ChatSenderBubble'
 import { ChatRecipientBubble } from './ChatRecipientBubble'
@@ -39,150 +42,230 @@ interface ChatInfo {
   creatorId?: string
 }
 
-export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
-  const [messageSending, setMessageSending] = useState(false)
-  const [chatInfo, setChatInfo] = useState<ChatInfo | null>(null)
-  const [participants, setParticipants] = useState<ParticipantInfo[]>([])
-  const [takeoverLoading, setTakeoverLoading] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const lastMessageCountRef = useRef(0)
+// ── Day separator ────────────────────────────────────────────────────────────
+function DaySeparator({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 my-3 px-2">
+      <div className="flex-1 h-px bg-border/60" />
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70 px-2 py-0.5 rounded-full bg-muted/60 select-none">
+        {label}
+      </span>
+      <div className="flex-1 h-px bg-border/60" />
+    </div>
+  )
+}
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+// ── Message cache helpers ────────────────────────────────────────────────────
+const CACHE_VERSION = 1
+
+function getCacheKey(chatId: string) {
+  return `umart_chat_msgs_v${CACHE_VERSION}_${chatId}`
+}
+
+function loadCachedMessages(chatId: string): Message[] {
+  try {
+    const raw = sessionStorage.getItem(getCacheKey(chatId))
+    if (!raw) return []
+    return JSON.parse(raw) as Message[]
+  } catch {
+    return []
+  }
+}
+
+function saveMessagesToCache(chatId: string, messages: Message[]) {
+  try {
+    // Cap at 200 messages to keep storage lean
+    const toSave = messages.slice(-200)
+    sessionStorage.setItem(getCacheKey(chatId), JSON.stringify(toSave))
+  } catch {
+    // storage full — ignore
+  }
+}
+
+// ── Group messages by day ────────────────────────────────────────────────────
+function groupByDay(messages: Message[]): Array<{ dayKey: string; label: string; messages: Message[] }> {
+  const groups: Map<string, Message[]> = new Map()
+
+  for (const msg of messages) {
+    const date = convertToDate(msg.createdAt)
+    const key  = getDayKey(date)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(msg)
   }
 
+  return Array.from(groups.entries()).map(([dayKey, msgs]) => ({
+    dayKey,
+    label:    getChatDayLabel(convertToDate(msgs[0].createdAt)),
+    messages: msgs,
+  }))
+}
+
+export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) {
+  const [messages,        setMessages]        = useState<Message[]>([])
+  const [loading,         setLoading]         = useState(true)
+  const [error,           setError]           = useState('')
+  const [currentUserId,   setCurrentUserId]   = useState<string | null>(null)
+  const [messageSending,  setMessageSending]  = useState(false)
+  const [chatInfo,        setChatInfo]        = useState<ChatInfo | null>(null)
+  const [participants,    setParticipants]    = useState<ParticipantInfo[]>([])
+  const [takeoverLoading, setTakeoverLoading] = useState(false)
+
+  const messagesEndRef      = useRef<HTMLDivElement>(null)
+  const scrollContainerRef  = useRef<HTMLDivElement>(null)
+  const initialScrollDone   = useRef(false)
+  const isFirstLoad         = useRef(true)
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) setCurrentUserId(user.uid)
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (u) setCurrentUserId(u.uid)
     })
-    return () => unsubscribe()
+    return () => unsub()
   }, [])
 
-  // Fetch participants (emails) once when chatId changes
+  // ── Scroll to bottom ──────────────────────────────────────────────────────
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' })
+  }, [])
+
+  // ── Fetch participants ────────────────────────────────────────────────────
   useEffect(() => {
     if (!chatId) { setParticipants([]); return }
-
-    const fetchParticipants = async () => {
+    ;(async () => {
       try {
         const user = auth.currentUser
         if (!user) return
         const token = await user.getIdToken()
-        const res = await fetch(`/api/chat/${chatId}`, {
+        const res   = await fetch(`/api/chat/${chatId}`, {
           headers: { Authorization: `Bearer ${token}` },
         })
         const result = await res.json()
         if (result.success && result.data.participants) {
           setParticipants(result.data.participants)
         }
-      } catch {
-        // Non-critical — emails just won't show
-      }
-    }
-
-    fetchParticipants()
+      } catch { /* non-critical */ }
+    })()
   }, [chatId])
 
+  // ── Real-time message listener + cache ────────────────────────────────────
   useEffect(() => {
     if (!chatId) {
       setMessages([])
       setChatInfo(null)
       setLoading(false)
       setError('')
+      initialScrollDone.current = false
+      isFirstLoad.current = true
       return
     }
 
-    let unsubscribeMessages: (() => void) | null = null
-    let unsubscribeChat: (() => void) | null = null
+    // Pre-populate from cache so UI renders instantly
+    const cached = loadCachedMessages(chatId)
+    if (cached.length > 0) {
+      setMessages(cached)
+      setLoading(false)
+    }
 
-    const setupRealtimeListeners = async () => {
+    let unsubMessages: (() => void) | null = null
+    let unsubChat: (() => void) | null     = null
+
+    const setup = async () => {
       try {
-        setLoading(true)
+        if (!cached.length) setLoading(true)
         setError('')
 
         const user = auth.currentUser
         if (!user) { setError('You must be logged in'); setLoading(false); return }
 
-        const chatDocRef = doc(db, 'chats', chatId)
-        unsubscribeChat = onSnapshot(
-          chatDocRef,
-          (chatDoc) => {
-            if (chatDoc.exists()) {
-              const data = chatDoc.data()
+        // Chat info listener
+        unsubChat = onSnapshot(
+          doc(db, 'chats', chatId),
+          (snap) => {
+            if (snap.exists()) {
+              const d = snap.data()
               setChatInfo({
-                productId: data?.productId,
-                productName: data?.productName,
-                aiEnabled: data?.aiEnabled ?? false,
-                humanTookOver: data?.humanTookOver ?? false,
-                creatorId: data?.creatorId,
+                productId:     d?.productId,
+                productName:   d?.productName,
+                aiEnabled:     d?.aiEnabled     ?? false,
+                humanTookOver: d?.humanTookOver ?? false,
+                creatorId:     d?.creatorId,
               })
             } else {
               setError('Chat not found')
             }
           },
-          (err) => {
-            console.error('Error listening to chat info:', err)
-            setError('Failed to load chat info')
-          }
+          (err) => { console.error('Chat info error:', err); setError('Failed to load chat info') }
         )
 
-        const messagesRef = collection(db, 'chats', chatId, 'messages')
-        const messagesQuery = query(messagesRef, orderBy('createdAt', 'asc'))
+        // Messages listener — always subscribe to full ordered feed
+        const msgsRef   = collection(db, 'chats', chatId, 'messages')
+        const msgsQuery = query(msgsRef, orderBy('createdAt', 'asc'))
 
-        unsubscribeMessages = onSnapshot(
-          messagesQuery,
-          (snapshot) => {
-            const newMessages: Message[] = snapshot.docs.map((doc) => {
-              const data = doc.data()
+        unsubMessages = onSnapshot(
+          msgsQuery,
+          (snap) => {
+            const incoming: Message[] = snap.docs.map((d) => {
+              const data = d.data()
               return {
-                id: doc.id,
-                senderId: data.senderId,
-                senderName: data.senderName || 'User',
-                text: data.text,
-                createdAt: data.createdAt,
-                isSystemAdmin: data.isSystemAdmin || false,
-                isCreator: data.isCreator || false,
-                isAI: data.isAI || false,
-                type: data.type,
+                id:                 d.id,
+                senderId:           data.senderId,
+                senderName:         data.senderName || 'User',
+                text:               data.text,
+                createdAt:          data.createdAt,
+                isSystemAdmin:      data.isSystemAdmin  || false,
+                isCreator:          data.isCreator      || false,
+                isAI:               data.isAI           || false,
+                type:               data.type,
                 paymentReferenceId: data.paymentReferenceId,
-                agreedAmount: data.agreedAmount,
-                grandPrice: data.grandPrice,
+                agreedAmount:       data.agreedAmount,
+                grandPrice:         data.grandPrice,
               }
             })
 
-            setMessages(newMessages)
+            setMessages(incoming)
+            saveMessagesToCache(chatId, incoming)
             setLoading(false)
 
-            if (newMessages.length > lastMessageCountRef.current) {
-              lastMessageCountRef.current = newMessages.length
-              setTimeout(scrollToBottom, 100)
+            // On first load: instant scroll (no animation), then switch to smooth
+            if (isFirstLoad.current) {
+              isFirstLoad.current = false
+              setTimeout(() => {
+                scrollToBottom('instant')
+                initialScrollDone.current = true
+              }, 60)
+            } else {
+              // New message arrived — smooth scroll only if user is near the bottom
+              const el = scrollContainerRef.current
+              if (el) {
+                const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+                if (distanceFromBottom < 200) setTimeout(() => scrollToBottom('smooth'), 60)
+              }
             }
           },
           (err) => {
-            console.error('Error listening to messages:', err)
+            console.error('Messages error:', err)
             setError('Failed to load messages: ' + err.message)
             setLoading(false)
           }
         )
       } catch (err: any) {
-        console.error('Error setting up listeners:', err)
+        console.error('Setup error:', err)
         setError(err.message || 'Failed to load messages')
         setLoading(false)
       }
     }
 
-    setupRealtimeListeners()
+    setup()
 
     return () => {
-      if (unsubscribeMessages) unsubscribeMessages()
-      if (unsubscribeChat) unsubscribeChat()
-      lastMessageCountRef.current = 0
+      unsubMessages?.()
+      unsubChat?.()
+      initialScrollDone.current = false
+      isFirstLoad.current = true
     }
-  }, [chatId])
+  }, [chatId, scrollToBottom])
 
+  // ── Send message ──────────────────────────────────────────────────────────
   const handleSendMessage = async (text: string) => {
     if (!chatId || !text.trim()) return
     try {
@@ -190,21 +273,21 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       const user = auth.currentUser
       if (!user) return
       const token = await user.getIdToken()
-      const response = await fetch('/api/chat/send', {
-        method: 'POST',
+      const res   = await fetch('/api/chat/send', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ chatId, text }),
+        body:    JSON.stringify({ chatId, text }),
       })
-      const result = await response.json()
-      if (!result.success) { console.error('Failed to send:', result.error); setError('Failed to send message') }
-    } catch (error) {
-      console.error('Error sending message:', error)
+      const result = await res.json()
+      if (!result.success) setError('Failed to send message')
+    } catch {
       setError('Failed to send message')
     } finally {
       setMessageSending(false)
     }
   }
 
+  // ── Takeover / hand back ──────────────────────────────────────────────────
   const handleTakeover = async () => {
     if (!chatId) return
     try {
@@ -212,19 +295,15 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       const user = auth.currentUser
       if (!user) return
       const token = await user.getIdToken()
-      const response = await fetch('/api/chat/takeover', {
+      const res = await fetch('/api/chat/takeover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ chatId }),
       })
-      const result = await response.json()
+      const result = await res.json()
       if (!result.success) setError(result.error || 'Failed to take over chat')
-    } catch (err) {
-      console.error('Takeover error:', err)
-      setError('Failed to take over chat')
-    } finally {
-      setTakeoverLoading(false)
-    }
+    } catch { setError('Failed to take over chat') }
+    finally { setTakeoverLoading(false) }
   }
 
   const handleHandBackToAI = async () => {
@@ -234,54 +313,47 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       const user = auth.currentUser
       if (!user) return
       const token = await user.getIdToken()
-      const response = await fetch('/api/chat/takeover', {
+      await fetch('/api/chat/takeover', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ chatId }),
       })
-      const result = await response.json()
-      if (!result.success) setError(result.error || 'Failed to hand back to AI')
-    } catch (err) {
-      console.error('Hand back error:', err)
-    } finally {
-      setTakeoverLoading(false)
-    }
+    } catch { /* ignore */ }
+    finally { setTakeoverLoading(false) }
   }
 
+  // ── Empty state ───────────────────────────────────────────────────────────
   if (!chatId) {
     return (
-      <div className="flex items-center justify-center h-full bg-muted/50">
-        <div className="text-center">
-          <p className="text-lg font-medium text-muted-foreground">Select a Chat to start chatting</p>
-        </div>
+      <div className="flex items-center justify-center h-full bg-muted/20">
+        <p className="text-sm text-muted-foreground">Select a conversation to start chatting</p>
       </div>
     )
   }
 
-  if (loading) {
+  if (loading && messages.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-8 h-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">Loading messages...</p>
+          <Loader2 className="w-7 h-7 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading messages…</p>
         </div>
       </div>
     )
   }
 
-  const isAIActive   = chatInfo?.aiEnabled && !chatInfo?.humanTookOver
+  const isAIActive    = chatInfo?.aiEnabled && !chatInfo?.humanTookOver
   const isHumanActive = chatInfo?.aiEnabled && chatInfo?.humanTookOver
+  const dayGroups     = groupByDay(messages)
 
   return (
     <div className="flex flex-col h-full">
-      {/* ── Top bar: AI takeover + View Emails ─────────────────────────────── */}
+
+      {/* ── Top bar ── */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border gap-2 shrink-0">
-        {/* AI banner */}
         {showTakeoverButton && chatInfo?.aiEnabled ? (
           <div className={`flex items-center gap-2 text-sm rounded-lg px-3 py-1.5 flex-1 ${
-            isAIActive
-              ? 'bg-violet-50 dark:bg-violet-950/30'
-              : 'bg-amber-50 dark:bg-amber-950/30'
+            isAIActive ? 'bg-violet-50 dark:bg-violet-950/30' : 'bg-amber-50 dark:bg-amber-950/30'
           }`}>
             <span className={`font-medium text-xs ${isAIActive ? 'text-violet-700 dark:text-violet-300' : 'text-amber-700 dark:text-amber-300'}`}>
               {isAIActive ? '🤖 Clara is negotiating for you' : '👤 You are in control'}
@@ -292,7 +364,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
                 disabled={takeoverLoading}
                 className="ml-auto text-xs bg-violet-600 hover:bg-violet-700 text-white px-2 py-0.5 rounded-full transition-colors disabled:opacity-50"
               >
-                {takeoverLoading ? 'Taking over...' : 'Take Over'}
+                {takeoverLoading ? 'Taking over…' : 'Take Over'}
               </button>
             ) : (
               <button
@@ -300,7 +372,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
                 disabled={takeoverLoading}
                 className="ml-auto text-xs bg-amber-600 hover:bg-amber-700 text-white px-2 py-0.5 rounded-full transition-colors disabled:opacity-50"
               >
-                {takeoverLoading ? 'Handing back...' : 'Hand Back to AI'}
+                {takeoverLoading ? 'Handing back…' : 'Hand Back to AI'}
               </button>
             )}
           </div>
@@ -308,71 +380,91 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
           <div className="flex-1" />
         )}
 
-        {/* View Emails button — always shown when participants are loaded */}
         {participants.length > 0 && (
-          <ChatParticipantEmails
-            participants={participants}
-            currentUserId={currentUserId}
-          />
+          <ChatParticipantEmails participants={participants} currentUserId={currentUserId} />
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-4 p-4">
-        <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 mb-4">
-          <p className="text-sm text-destructive font-medium">
-            Chats are stored and we can review at any time. Buyers ensure to NOT MAKE PAYMENTS DIRECTLY IN SELLER ACCOUNT. Report any seller that asks you to make direct payment.
+      {/* ── Messages ── */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5
+          pb-[calc(4.5rem+env(safe-area-inset-bottom))]
+          md:pb-4"
+      >
+        {/* Warning banner */}
+        <div className="mx-2 mb-3 bg-destructive/8 border border-destructive/20 rounded-xl p-3">
+          <p className="text-xs text-destructive/80 leading-relaxed">
+            ⚠️ Never make direct payments to sellers. Report anyone who asks.
           </p>
         </div>
 
+        {/* Product link banner */}
         {chatInfo?.productId && (
-          <div className="bg-primary/10 border border-primary/30 rounded-lg p-3 mb-4">
-            <p className="text-sm text-foreground">
-              This chat started from this product:{' '}
-              <a href={`/product/${chatInfo.productId}`} className="text-primary hover:underline font-medium">
+          <div className="mx-2 mb-3 bg-primary/8 border border-primary/20 rounded-xl p-3">
+            <p className="text-xs text-foreground">
+              Chat about:{' '}
+              <a href={`/product/${chatInfo.productId}`} className="text-primary font-semibold hover:underline">
                 {chatInfo.productName || 'View Product'}
               </a>
             </p>
           </div>
         )}
 
-        {error && <div className="text-center text-destructive text-sm mb-4">{error}</div>}
-
-        {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-muted-foreground">No messages yet. Start the conversation!</p>
-          </div>
-        ) : (
-          messages.map((message) => {
-            const messageDate = convertToDate(message.createdAt)
-            return (
-              <div key={message.id}>
-                {message.senderId === currentUserId ? (
-                  <ChatSenderBubble
-                    text={message.text}
-                    senderName={message.senderName}
-                    timestamp={messageDate}
-                    isSystemAdmin={message.isSystemAdmin}
-                    isCreator={message.isCreator}
-                  />
-                ) : (
-                  <ChatRecipientBubble
-                    text={message.text}
-                    senderName={message.senderName}
-                    timestamp={messageDate}
-                    isSystemAdmin={message.isSystemAdmin}
-                    isCreator={message.isCreator}
-                    isAI={message.isAI}
-                    type={message.type}
-                    paymentReferenceId={message.paymentReferenceId}
-                    agreedAmount={message.agreedAmount}
-                    grandPrice={message.grandPrice}
-                  />
-                )}
-              </div>
-            )
-          })
+        {error && (
+          <div className="mx-2 mb-2 text-center text-xs text-destructive">{error}</div>
         )}
-        <div ref={messagesEndRef} />
+
+        {messages.length === 0 && (
+          <div className="flex items-center justify-center py-16">
+            <p className="text-sm text-muted-foreground">No messages yet. Say hello! 👋</p>
+          </div>
+        )}
+
+        {/* Day groups */}
+        {dayGroups.map((group) => (
+          <div key={group.dayKey}>
+            <DaySeparator label={group.label} />
+
+            {group.messages.map((message, idx) => {
+              const prevMsg   = group.messages[idx - 1]
+              // Show name when it's the first message in a run from this sender
+              const showName  = !prevMsg || prevMsg.senderId !== message.senderId
+              const msgDate   = convertToDate(message.createdAt)
+
+              return (
+                <div key={message.id} className={idx > 0 && group.messages[idx - 1].senderId === message.senderId ? 'mt-0.5' : 'mt-2'}>
+                  {message.senderId === currentUserId ? (
+                    <ChatSenderBubble
+                      text={message.text}
+                      senderName={message.senderName}
+                      timestamp={msgDate}
+                      isSystemAdmin={message.isSystemAdmin}
+                      isCreator={message.isCreator}
+                      showName={showName}
+                    />
+                  ) : (
+                    <ChatRecipientBubble
+                      text={message.text}
+                      senderName={message.senderName}
+                      timestamp={msgDate}
+                      isSystemAdmin={message.isSystemAdmin}
+                      isCreator={message.isCreator}
+                      isAI={message.isAI}
+                      type={message.type}
+                      paymentReferenceId={message.paymentReferenceId}
+                      agreedAmount={message.agreedAmount}
+                      grandPrice={message.grandPrice}
+                      showName={showName}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+
+        <div ref={messagesEndRef} className="h-1" />
       </div>
 
       <ChatBox

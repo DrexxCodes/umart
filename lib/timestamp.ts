@@ -77,3 +77,35 @@ export function formatDateTime(timestamp: any): string {
     minute: '2-digit',
   })
 }
+
+// ── Chat date grouping helpers ─────────────────────────────────────────────────
+
+/**
+ * Returns the day label for a chat date separator.
+ * "Today", "Yesterday", or "DD/MM/YYYY"
+ */
+export function getChatDayLabel(date: Date): string {
+  const now   = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const day   = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+
+  const diffDays = Math.round((today.getTime() - day.getTime()) / 86400000)
+
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+
+  const dd   = String(date.getDate()).padStart(2, '0')
+  const mm   = String(date.getMonth() + 1).padStart(2, '0')
+  const yyyy = date.getFullYear()
+  return `${dd}/${mm}/${yyyy}`
+}
+
+/**
+ * Returns a "YYYY-MM-DD" key for grouping messages by day.
+ */
+export function getDayKey(date: Date): string {
+  const yyyy = date.getFullYear()
+  const mm   = String(date.getMonth() + 1).padStart(2, '0')
+  const dd   = String(date.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}

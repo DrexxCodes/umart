@@ -3,10 +3,71 @@ import { adminDb, adminAuth } from '@/lib/firebase-admin'
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { verifyCredoTransaction } from '@/lib/credo'
 
-// ── GET /api/payment/status?refId=xxx ──────────────────────────────────────
+// Resolve a Credo raw response to a normalised internal status string.
+// Returns: 'paid' | 'failed' | 'cancelled' | 'not_started'
+function resolveCredoStatus(raw: any): {
+  status: 'paid' | 'failed' | 'cancelled' | 'not_started'
+  userMessage: string
+} {
+  // 404 or empty data means payment was never started
+  if (!raw || raw.status === 404 || raw.data === '' || raw.data == null) {
+    return {
+      status: 'not_started',
+      userMessage: 'Transaction not created. Use Pay Now to begin your payment.',
+    }
+  }
+
+  const data = raw.data
+  const statusMsg: string  = (data?.statusMessage ?? '').toLowerCase()
+  const credoStatus: string = String(data?.status ?? '').toUpperCase()
+
+  // "Successfully processed" / numeric status 0 means approved
+  if (
+    statusMsg.includes('successfully processed') ||
+    statusMsg.includes('approved') ||
+    statusMsg.includes('successful') ||
+    credoStatus === '0' ||
+    credoStatus === 'APPROVED' ||
+    credoStatus === 'SUCCESSFUL' ||
+    credoStatus === 'SUCCESS'
+  ) {
+    return {
+      status: 'paid',
+      userMessage: 'Transaction completed. Refresh page.',
+    }
+  }
+
+  // "Transaction cancelled" = user closed the widget
+  if (statusMsg.includes('cancelled') || statusMsg.includes('canceled')) {
+    return {
+      status: 'cancelled',
+      userMessage: 'The transaction was not completed. Try paying again.',
+    }
+  }
+
+  // Explicit failure
+  if (
+    statusMsg.includes('declined') ||
+    statusMsg.includes('failed') ||
+    credoStatus === 'DECLINED' ||
+    credoStatus === 'FAILED' ||
+    credoStatus === 'ABANDONED'
+  ) {
+    return {
+      status: 'failed',
+      userMessage: 'Payment declined or failed. Please try again.',
+    }
+  }
+
+  // Anything else (pending, unknown) = treat as not started / still in progress
+  return {
+    status: 'not_started',
+    userMessage: 'Transaction not created. Use Pay Now to begin your payment.',
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
-    // ── Auth ──────────────────────────────────────────────────────────────
     const authHeader = req.headers.get('authorization')
     if (!authHeader?.startsWith('Bearer ')) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -20,7 +81,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    // ── Read refId from query params, NOT body ─────────────────────────────
     const { searchParams } = new URL(req.url)
     const refId = searchParams.get('refId')
 
@@ -28,7 +88,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing refId' }, { status: 400 })
     }
 
-    // ── Ownership check ─────────────────────────────────────────────────────
     const refDoc = await adminDb.collection('references').doc(refId).get()
     if (!refDoc.exists) {
       return NextResponse.json({ success: false, error: 'Transaction not found' }, { status: 404 })
@@ -39,48 +98,50 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Access denied' }, { status: 403 })
     }
 
-    // ── Already settled — no need to hit Credo ──────────────────────────────
+    // Already settled — no need to hit Credo
     if (refData.status === 'paid') {
-      return NextResponse.json({ success: true, status: 'paid', message: 'Already marked as paid' })
+      return NextResponse.json({ success: true, status: 'paid', userMessage: 'Transaction completed. Refresh page.' })
     }
 
-    // ── Call Credo verify endpoint ──────────────────────────────────────────
-    let credoResult
+    // Call Credo — catch ALL errors including 404
+    let credoRaw: any = null
     try {
-      credoResult = await verifyCredoTransaction(refId)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Credo verification failed'
-      console.error('[payment/status] Credo verify error:', err)
-      return NextResponse.json({ success: false, error: msg }, { status: 502 })
+      credoRaw = await verifyCredoTransaction(refId)
+    } catch (err: any) {
+      const msg: string = err?.message ?? ''
+      // Credo throws on 404 — treat as not_started
+      if (msg.includes('404') || msg.includes('not found')) {
+        return NextResponse.json({
+          success: true,
+          status:      'not_started',
+          userMessage: 'Transaction not created. Use Pay Now to begin your payment.',
+        })
+      }
+      console.error('[payment/status] Credo error:', err)
+      return NextResponse.json({ success: false, error: 'Payment provider unavailable. Try again.' }, { status: 502 })
     }
 
-    // Log full Credo response — this will show the business code in the payload
-    console.log('[payment/status] Full Credo verify response:', JSON.stringify(credoResult, null, 2))
+    console.log('[payment/status] Credo response:', JSON.stringify(credoRaw, null, 2))
 
-    const credoData = credoResult.data
-    const credoStatus: string = credoData?.status ?? 'UNKNOWN'
+    const { status: resolved, userMessage } = resolveCredoStatus(credoRaw)
 
-    // ── APPROVED — update Firestore ─────────────────────────────────────────
-    if (credoStatus === 'APPROVED') {
-      // Idempotency: another process may have already updated this
-      const freshSnap = await adminDb.collection('references').doc(refId).get()
-      if (freshSnap.data()?.status === 'paid') {
-        return NextResponse.json({ success: true, status: 'paid', message: 'Already marked as paid' })
+    // ── PAID — run atomic stats update ────────────────────────────────────
+    if (resolved === 'paid') {
+      // Idempotency guard
+      const fresh = await adminDb.collection('references').doc(refId).get()
+      if (fresh.data()?.status === 'paid') {
+        return NextResponse.json({ success: true, status: 'paid', userMessage: 'Transaction completed. Refresh page.' })
       }
 
-      const grandPrice: number  = refData.grandPrice  ?? 0
-      const itemsTotal: number  = refData.itemsTotal  ?? 0
+      const grandPrice: number   = refData.grandPrice   ?? 0
+      const itemsTotal: number   = refData.itemsTotal   ?? 0
       const sellerPayout: number = refData.sellerPayout ?? grandPrice
       const platformFee: number  = refData.platformFee  ?? 0
-      const sellerId: string    = refData.sellerId
+      const sellerId: string     = refData.sellerId
 
-      if (refData.platformFee == null) {
-        console.warn(`[payment/status] platformFee missing on reference ${refId} — falling back to 0`)
-      }
-
-      const credoRef = credoData.id ?? null
-      const now = Timestamp.now()
-      const batch = adminDb.batch()
+      const credoRef = credoRaw?.data?.id ?? null
+      const now      = Timestamp.now()
+      const batch    = adminDb.batch()
 
       batch.update(adminDb.collection('references').doc(refId), {
         status:    'paid',
@@ -98,17 +159,7 @@ export async function GET(req: NextRequest) {
 
       batch.set(
         adminDb.collection('admin').doc('escrow').collection('transactions').doc(refId),
-        {
-          refId,
-          sellerId,
-          buyerId:      refData.buyerId,
-          itemAmount:   itemsTotal,
-          platformFee,
-          grandPrice,
-          sellerPayout,
-          paidAt:       now,
-          paidVia:      'credo',
-        }
+        { refId, sellerId, buyerId: refData.buyerId, itemAmount: itemsTotal, platformFee, grandPrice, sellerPayout, paidAt: now, paidVia: 'credo' }
       )
 
       batch.set(adminDb.collection('admin').doc('global'), {
@@ -118,44 +169,27 @@ export async function GET(req: NextRequest) {
         updatedAt:         FieldValue.serverTimestamp(),
       }, { merge: true })
 
-      const nigerianTime = new Date(Date.now() + 60 * 60 * 1000)
-      const y = nigerianTime.getUTCFullYear().toString()
-      const m = `${y}-${String(nigerianTime.getUTCMonth() + 1).padStart(2, '0')}`
-      const d = `${m}-${String(nigerianTime.getUTCDate()).padStart(2, '0')}`
-
-      const ap = {
-        totalPaid:        FieldValue.increment(grandPrice),
-        totalPlatformFee: FieldValue.increment(platformFee),
-        totalPaidCount:   FieldValue.increment(1),
-        updatedAt:        FieldValue.serverTimestamp(),
-      }
-
+      const t = new Date(Date.now() + 60 * 60 * 1000)
+      const y = t.getUTCFullYear().toString()
+      const m = `${y}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`
+      const d = `${m}-${String(t.getUTCDate()).padStart(2, '0')}`
+      const ap = { totalPaid: FieldValue.increment(grandPrice), totalPlatformFee: FieldValue.increment(platformFee), totalPaidCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() }
       batch.set(adminDb.collection('admin').doc('analytics').collection('daily').doc(d),   ap, { merge: true })
       batch.set(adminDb.collection('admin').doc('analytics').collection('monthly').doc(m), ap, { merge: true })
       batch.set(adminDb.collection('admin').doc('analytics').collection('yearly').doc(y),  ap, { merge: true })
 
       await batch.commit()
-
       console.log(`[payment/status] Marked paid via manual verify — refId: ${refId}, ₦${grandPrice}`)
-      return NextResponse.json({ success: true, status: 'paid', message: 'Payment confirmed and recorded' })
     }
 
-    // ── DECLINED / FAILED ───────────────────────────────────────────────────
-    if (['DECLINED', 'FAILED', 'ABANDONED'].includes(credoStatus)) {
+    // ── Failed — update reference ────────────────────────────────────────
+    if (resolved === 'failed') {
       await adminDb.collection('references').doc(refId).update({
-        status:    'failed',
-        updatedAt: Timestamp.now(),
-      })
-      return NextResponse.json({ success: true, status: 'failed', message: 'Payment was not successful' })
+        status: 'failed', updatedAt: Timestamp.now(),
+      }).catch(() => {/* non-fatal */})
     }
 
-    // ── PENDING or other — no state change ──────────────────────────────────
-    return NextResponse.json({ 
-      success: true, 
-      status: 'not_found', 
-      message: 'No payment attempt found for this order. Please use Pay Now to complete your payment.' 
-    })
-
+    return NextResponse.json({ success: true, status: resolved, userMessage })
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Unexpected error'
     console.error('[payment/status] Unhandled error:', error)

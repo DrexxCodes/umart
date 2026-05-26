@@ -1,4 +1,3 @@
-import { Badge } from '@/components/ui/badge'
 import { formatTime } from '@/lib/timestamp'
 
 interface ChatSenderBubbleProps {
@@ -7,41 +6,39 @@ interface ChatSenderBubbleProps {
   timestamp: Date
   isSystemAdmin: boolean
   isCreator: boolean
+  /** Show sender name above bubble (first in a run) */
+  showName?: boolean
 }
 
 export function ChatSenderBubble({
   text,
-  senderName,
   timestamp,
-  isSystemAdmin,
   isCreator,
+  isSystemAdmin,
+  showName = false,
 }: ChatSenderBubbleProps) {
-  const getRoleTag = () => {
-    if (isSystemAdmin && isCreator) {
-      return <Badge className="ml-2 text-xs">Admin + Seller</Badge>
-    }
-    if (isSystemAdmin) {
-      return <Badge className="ml-2 text-xs" variant="destructive">System Admin</Badge>
-    }
-    if (isCreator) {
-      return <Badge className="ml-2 text-xs" variant="secondary">Seller</Badge>
-    }
-    return <Badge className="ml-2 text-xs" variant="outline">Buyer</Badge>
-  }
+  const roleLabel = isSystemAdmin && isCreator
+    ? 'Admin · Seller'
+    : isSystemAdmin ? 'Admin'
+    : isCreator ? 'Seller'
+    : null   // buyer's own bubble — no label needed
 
   return (
-    <div className="flex justify-end">
-      <div className="max-w-xs lg:max-w-md xl:max-w-lg">
-        <div className="flex items-center justify-end gap-2 mb-1">
-          <span className="text-xs font-medium text-muted-foreground">{senderName}</span>
-          {getRoleTag()}
+    <div className="flex justify-end px-1">
+      <div className="max-w-[78%] sm:max-w-sm lg:max-w-md space-y-0.5">
+        {showName && roleLabel && (
+          <p className="text-right text-[10px] font-semibold text-muted-foreground pr-1 mb-0.5">
+            {roleLabel}
+          </p>
+        )}
+        <div className="flex items-end justify-end gap-1.5">
+          <span className="text-[10px] text-muted-foreground/70 shrink-0 pb-0.5">
+            {formatTime(timestamp)}
+          </span>
+          <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-md px-3.5 py-2 shadow-sm">
+            <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{text}</p>
+          </div>
         </div>
-        <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-none px-4 py-2">
-          <p className="break-words">{text}</p>
-        </div>
-        <p className="text-xs text-muted-foreground mt-1 text-right">
-          {formatTime(timestamp)}
-        </p>
       </div>
     </div>
   )

@@ -97,9 +97,9 @@ export function PaymentButton({
       onSuccess: (response: CredoResponse) => {
         setLoadingState('idle')
         if (response.status === 'APPROVED') {
-          toast.success('Payment successful! Redirecting...')
+          toast.success('Payment successful!')
           onSuccess?.()
-          router.push(`/success?refId=${response.reference}`)
+          router.push(`/receipt?transactionRef=${response.reference}`)
         } else {
           toast.error('Payment was not completed. Please try again.')
         }
@@ -176,20 +176,22 @@ export function AlreadyPaid({ refId, onConfirmed, onFailed }: AlreadyPaidProps) 
         return
       }
 
-    const status = result.data?.status ?? result.status
+      // API returns `status` and `userMessage` directly on the result object
+      const status      = result.status      as string
+      const userMessage = result.userMessage as string | undefined
 
-    if (status === 'paid') {
-      setMessage('Payment confirmed!')
-      onConfirmed?.()
-    } else if (status === 'failed') {
-      setMessage('Payment failed or was declined. Please try again.')
-      onFailed?.()
-    } else if (status === 'not_found') {
-      setMessage('No payment attempt found for this order. Please use Pay Now.')
-    } else {
-      // pending or anything else from Credo
-      setMessage('Payment still pending — please wait a moment and try again.')
-    }
+      if (status === 'paid') {
+        setMessage(userMessage ?? 'Transaction completed. Refresh page.')
+        onConfirmed?.()
+      } else if (status === 'failed') {
+        setMessage(userMessage ?? 'Payment declined or failed. Please try again.')
+        onFailed?.()
+      } else if (status === 'cancelled') {
+        setMessage(userMessage ?? 'The transaction was not completed. Try paying again.')
+      } else {
+        // not_started or unknown
+        setMessage(userMessage ?? 'Transaction not created. Use Pay Now to begin your payment.')
+      }
 
       setState('done')
     } catch (err: any) {
@@ -202,16 +204,22 @@ export function AlreadyPaid({ refId, onConfirmed, onFailed }: AlreadyPaidProps) 
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        Checking transaction…
+        Checking…
       </span>
     )
   }
 
   if (state === 'done' && message) {
-    const isSuccess = message.startsWith('Payment confirmed')
-    const isFailed  = message.startsWith('Payment failed')
+    const isSuccess  = message.startsWith('Transaction completed')
+    const isFailed   = message.includes('declined') || message.includes('failed')
     return (
-      <span className={`text-xs ${isSuccess ? 'text-emerald-600 font-medium' : isFailed ? 'text-destructive' : 'text-muted-foreground'}`}>
+      <span
+        className={`block text-xs leading-snug break-words max-w-[200px] sm:max-w-xs ${
+          isSuccess ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+          : isFailed ? 'text-destructive'
+          : 'text-muted-foreground'
+        }`}
+      >
         {message}
       </span>
     )

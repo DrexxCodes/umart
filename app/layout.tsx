@@ -2,10 +2,12 @@ import React from "react"
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+// @ts-ignore: allow side-effect CSS import in Next.js app directory
 import './globals.css'
+import { FooterWrapper } from '@/components/footer-wrapper'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AuthProvider } from '@/components/auth-provider'
-import { Footer } from '@/components/footer'
+import { IosInstallPrompt } from '@/components/ios-install-prompt'
 import { ServiceWorkerRegistrar } from '@/components/service-worker-registrar'
 
 const _geist = Geist({ subsets: ["latin"] })
@@ -54,13 +56,14 @@ export default function RootLayout({
               <main className="flex-1">
                 {children}
               </main>
-              <Footer />
+              <FooterWrapper />
             </div>
           </AuthProvider>
         </ThemeProvider>
         <Analytics />
         {/* Registers both the PWA sw.js and firebase-messaging-sw.js */}
         <ServiceWorkerRegistrar />
+        <IosInstallPrompt />
       </body>
     </html>
   )
