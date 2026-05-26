@@ -4,7 +4,6 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import {
   collection, query, orderBy, onSnapshot, doc,
-  startAfter, limit, getDocs, type QueryDocumentSnapshot,
 } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { convertToDate, getChatDayLabel, getDayKey } from '@/lib/timestamp'
@@ -27,6 +26,7 @@ interface Message {
   paymentReferenceId?: string
   agreedAmount?: number
   grandPrice?: number
+  seen?: boolean
 }
 
 interface ChatAreaProps {
@@ -56,7 +56,7 @@ function DaySeparator({ label }: { label: string }) {
 }
 
 // ── Message cache helpers ────────────────────────────────────────────────────
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2   // bump when Message shape changes
 
 function getCacheKey(chatId: string) {
   return `umart_chat_msgs_v${CACHE_VERSION}_${chatId}`
@@ -74,9 +74,7 @@ function loadCachedMessages(chatId: string): Message[] {
 
 function saveMessagesToCache(chatId: string, messages: Message[]) {
   try {
-    // Cap at 200 messages to keep storage lean
-    const toSave = messages.slice(-200)
-    sessionStorage.setItem(getCacheKey(chatId), JSON.stringify(toSave))
+    sessionStorage.setItem(getCacheKey(chatId), JSON.stringify(messages.slice(-200)))
   } catch {
     // storage full — ignore
   }
@@ -85,14 +83,12 @@ function saveMessagesToCache(chatId: string, messages: Message[]) {
 // ── Group messages by day ────────────────────────────────────────────────────
 function groupByDay(messages: Message[]): Array<{ dayKey: string; label: string; messages: Message[] }> {
   const groups: Map<string, Message[]> = new Map()
-
   for (const msg of messages) {
     const date = convertToDate(msg.createdAt)
     const key  = getDayKey(date)
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(msg)
   }
-
   return Array.from(groups.entries()).map(([dayKey, msgs]) => ({
     dayKey,
     label:    getChatDayLabel(convertToDate(msgs[0].createdAt)),
@@ -114,6 +110,8 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
   const scrollContainerRef  = useRef<HTMLDivElement>(null)
   const initialScrollDone   = useRef(false)
   const isFirstLoad         = useRef(true)
+  // Track last chatId we called seen for to avoid duplicate calls
+  const seenMarkedForRef    = useRef<string | null>(null)
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -126,6 +124,24 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
   // ── Scroll to bottom ──────────────────────────────────────────────────────
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' })
+  }, [])
+
+  // ── Mark messages as seen when chat is opened ─────────────────────────────
+  const markAsSeen = useCallback(async (cId: string) => {
+    if (seenMarkedForRef.current === cId) return
+    seenMarkedForRef.current = cId
+    try {
+      const user = auth.currentUser
+      if (!user) return
+      const token = await user.getIdToken()
+      await fetch('/api/chat/seen', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body:    JSON.stringify({ chatId: cId }),
+      })
+    } catch (err) {
+      console.error('[ChatArea] markAsSeen error:', err)
+    }
   }, [])
 
   // ── Fetch participants ────────────────────────────────────────────────────
@@ -147,7 +163,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
     })()
   }, [chatId])
 
-  // ── Real-time message listener + cache ────────────────────────────────────
+  // ── Real-time message listener + cache + seen mark ────────────────────────
   useEffect(() => {
     if (!chatId) {
       setMessages([])
@@ -156,10 +172,11 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       setError('')
       initialScrollDone.current = false
       isFirstLoad.current = true
+      seenMarkedForRef.current = null
       return
     }
 
-    // Pre-populate from cache so UI renders instantly
+    // Pre-populate from cache
     const cached = loadCachedMessages(chatId)
     if (cached.length > 0) {
       setMessages(cached)
@@ -197,7 +214,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
           (err) => { console.error('Chat info error:', err); setError('Failed to load chat info') }
         )
 
-        // Messages listener — always subscribe to full ordered feed
+        // Messages listener
         const msgsRef   = collection(db, 'chats', chatId, 'messages')
         const msgsQuery = query(msgsRef, orderBy('createdAt', 'asc'))
 
@@ -219,6 +236,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
                 paymentReferenceId: data.paymentReferenceId,
                 agreedAmount:       data.agreedAmount,
                 grandPrice:         data.grandPrice,
+                seen:               data.seen           ?? false,
               }
             })
 
@@ -226,7 +244,9 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
             saveMessagesToCache(chatId, incoming)
             setLoading(false)
 
-            // On first load: instant scroll (no animation), then switch to smooth
+            // Mark incoming messages as seen (non-blocking)
+            markAsSeen(chatId)
+
             if (isFirstLoad.current) {
               isFirstLoad.current = false
               setTimeout(() => {
@@ -234,7 +254,6 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
                 initialScrollDone.current = true
               }, 60)
             } else {
-              // New message arrived — smooth scroll only if user is near the bottom
               const el = scrollContainerRef.current
               if (el) {
                 const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
@@ -263,7 +282,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       initialScrollDone.current = false
       isFirstLoad.current = true
     }
-  }, [chatId, scrollToBottom])
+  }, [chatId, scrollToBottom, markAsSeen])
 
   // ── Send message ──────────────────────────────────────────────────────────
   const handleSendMessage = async (text: string) => {
@@ -392,14 +411,12 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
           pb-[calc(4.5rem+env(safe-area-inset-bottom))]
           md:pb-4"
       >
-        {/* Warning banner */}
         <div className="mx-2 mb-3 bg-destructive/8 border border-destructive/20 rounded-xl p-3">
           <p className="text-xs text-destructive/80 leading-relaxed">
             ⚠️ Never make direct payments to sellers. Report anyone who asks.
           </p>
         </div>
 
-        {/* Product link banner */}
         {chatInfo?.productId && (
           <div className="mx-2 mb-3 bg-primary/8 border border-primary/20 rounded-xl p-3">
             <p className="text-xs text-foreground">
@@ -421,20 +438,22 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
           </div>
         )}
 
-        {/* Day groups */}
         {dayGroups.map((group) => (
           <div key={group.dayKey}>
             <DaySeparator label={group.label} />
 
             {group.messages.map((message, idx) => {
-              const prevMsg   = group.messages[idx - 1]
-              // Show name when it's the first message in a run from this sender
-              const showName  = !prevMsg || prevMsg.senderId !== message.senderId
-              const msgDate   = convertToDate(message.createdAt)
+              const prevMsg  = group.messages[idx - 1]
+              const showName = !prevMsg || prevMsg.senderId !== message.senderId
+              const msgDate  = convertToDate(message.createdAt)
+              const isMine   = message.senderId === currentUserId
 
               return (
-                <div key={message.id} className={idx > 0 && group.messages[idx - 1].senderId === message.senderId ? 'mt-0.5' : 'mt-2'}>
-                  {message.senderId === currentUserId ? (
+                <div
+                  key={message.id}
+                  className={idx > 0 && group.messages[idx - 1].senderId === message.senderId ? 'mt-0.5' : 'mt-2'}
+                >
+                  {isMine ? (
                     <ChatSenderBubble
                       text={message.text}
                       senderName={message.senderName}
@@ -442,6 +461,7 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
                       isSystemAdmin={message.isSystemAdmin}
                       isCreator={message.isCreator}
                       showName={showName}
+                      seen={message.seen ?? false}
                     />
                   ) : (
                     <ChatRecipientBubble

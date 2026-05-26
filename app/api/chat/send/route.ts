@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
-import { Timestamp } from 'firebase-admin/firestore'
+import { Timestamp, FieldValue } from 'firebase-admin/firestore'
 import { upsertPendingChatNotification } from '@/lib/fcm'
 
 export async function POST(req: NextRequest) {
@@ -31,25 +31,38 @@ export async function POST(req: NextRequest) {
     const senderRoles = senderDoc.data()?.roles || {}
     const isCreator = senderRoles.isCreator || false
 
+    const now = Timestamp.now()
     const messageRef = adminDb.collection('chats').doc(chatId).collection('messages').doc()
     const batch = adminDb.batch()
 
+    // ── Write message with seen: false so the recipient can track unread ──
     batch.set(messageRef, {
       senderId: userId,
       senderName,
       text: text.trim(),
-      createdAt: Timestamp.now(),
+      createdAt: now,
       isSystemAdmin: senderRoles.isAdmin || false,
       isCreator,
       isAI: false,
+      seen: false,          // <-- NEW: unread by default
     })
 
+    // ── Update the main chat doc ──
     batch.update(adminDb.collection('chats').doc(chatId), {
       lastMessage: text.trim(),
-      lastMessageTime: Timestamp.now(),
+      lastMessageTime: now,
       lastMessageSenderName: senderName,
-      updatedAt: Timestamp.now(),
+      updatedAt: now,
     })
+
+    // ── Update each participant's chats sub-doc lastMessageTime so the
+    //    ChatList can sort by it in real time ────────────────────────────
+    for (const participantId of chatData.participantIds as string[]) {
+      batch.update(
+        adminDb.collection('users').doc(participantId).collection('chats').doc(chatId),
+        { lastMessageTime: now }
+      )
+    }
 
     await batch.commit()
 
@@ -67,16 +80,11 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Push notification (non-blocking, 30-second debounce) ───────────────
-    // Find the recipient (the other participant)
     const recipientId = chatData.participantIds.find((id: string) => id !== userId)
     if (recipientId) {
-      // Upsert the pending counter — returns the current accumulated count
       const notifDocId = `${chatId}_${recipientId}`
       upsertPendingChatNotification(chatId, recipientId, userId, senderName)
         .then((count) => {
-          // Only schedule the notify call on the FIRST message in the window.
-          // Subsequent messages just bump the counter; the scheduled call
-          // reads the final count when it fires 30s after the first message.
           if (count === 1) {
             setTimeout(() => {
               fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/chat/notify`, {

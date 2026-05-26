@@ -1,21 +1,25 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
-import { collection, query, orderBy, onSnapshot, doc, getDoc } from 'firebase/firestore'
+import {
+  collection, query, orderBy, onSnapshot, doc,
+  where, type Timestamp,
+} from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { formatRelativeTime } from '@/lib/timestamp'
 import { Card } from '@/components/ui/card'
-import { Loader2, MessageCircle } from 'lucide-react'
+import { Loader2, MessageCircle, Eye } from 'lucide-react'
 
 interface ChatItem {
   chatId: string
   participantName: string
   participantId: string
   lastMessage: string
-  lastMessageTime: any
+  lastMessageTime: Timestamp | null
   lastMessageSenderName?: string
-  createdAt?: any
+  createdAt?: Timestamp | null
+  unreadCount: number
 }
 
 interface ChatListProps {
@@ -24,111 +28,120 @@ interface ChatListProps {
 }
 
 export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
-  const [chats, setChats] = useState<ChatItem[]>([])
+  const [chats,   setChats]   = useState<ChatItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [error,   setError]   = useState('')
+
+  // ── Sort helper: most recent message first, fallback to createdAt ─────────
+  const sortChats = useCallback((list: ChatItem[]) =>
+    [...list].sort((a, b) => {
+      const ta = a.lastMessageTime ?? a.createdAt
+      const tb = b.lastMessageTime ?? b.createdAt
+      if (!ta && !tb) return 0
+      if (!ta) return 1
+      if (!tb) return -1
+      const tsA = typeof ta.toMillis === 'function' ? ta.toMillis() : 0
+      const tsB = typeof tb.toMillis === 'function' ? tb.toMillis() : 0
+      return tsB - tsA
+    }), [])
 
   useEffect(() => {
     let unsubscribeSnapshot: (() => void) | null = null
-    const chatUnsubscribers = new Map<string, () => void>()
+    const chatUnsubscribers  = new Map<string, () => void>()
+    const unreadUnsubscribers = new Map<string, () => void>()
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        setLoading(false)
-        return
-      }
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) { setLoading(false); return }
 
-      try {
-        // Set up real-time listener for user's chats
-        const userChatsRef = collection(db, 'users', user.uid, 'chats')
-        const q = query(userChatsRef, orderBy('createdAt', 'desc'))
+      const userChatsRef = collection(db, 'users', user.uid, 'chats')
+      // Order by lastMessageTime desc — this field is updated by the send API
+      // so new messages bubble to the top automatically.
+      const q = query(userChatsRef, orderBy('lastMessageTime', 'desc'))
 
-        unsubscribeSnapshot = onSnapshot(
-          q,
-          async (snapshot) => {
-            if (snapshot.empty) {
-              setChats([])
-              setLoading(false)
-              return
-            }
+      unsubscribeSnapshot = onSnapshot(
+        q,
+        (snapshot) => {
+          if (snapshot.empty) { setChats([]); setLoading(false); return }
 
-            // Clean up old chat listeners
-            chatUnsubscribers.forEach(unsub => unsub())
-            chatUnsubscribers.clear()
+          // Clean up old per-chat listeners
+          chatUnsubscribers.forEach(u => u())
+          chatUnsubscribers.clear()
+          unreadUnsubscribers.forEach(u => u())
+          unreadUnsubscribers.clear()
 
-            const chatsMap = new Map<string, ChatItem>()
+          const chatsMap = new Map<string, ChatItem>()
 
-            // Set up listeners for each chat
-            snapshot.docs.forEach((chatRefDoc) => {
-              const chatRefData = chatRefDoc.data()
-              const chatId = chatRefData.chatId
+          snapshot.docs.forEach((chatRefDoc) => {
+            const ref = chatRefDoc.data()
+            const chatId = ref.chatId as string
 
-              // Initialize with reference data
-              chatsMap.set(chatId, {
-                chatId,
-                participantName: chatRefData.participantName || 'Unknown',
-                participantId: chatRefData.participantId || '',
-                lastMessage: '',
-                lastMessageTime: chatRefData.createdAt,
-                lastMessageSenderName: '',
-                createdAt: chatRefData.createdAt,
-              })
-
-              // Listen to the main chat document for real-time updates
-              const chatDocRef = doc(db, 'chats', chatId)
-              const unsubChat = onSnapshot(
-                chatDocRef,
-                (chatDoc) => {
-                  if (chatDoc.exists()) {
-                    const chatData = chatDoc.data()
-                    chatsMap.set(chatId, {
-                      chatId,
-                      participantName: chatRefData.participantName || 'Unknown',
-                      participantId: chatRefData.participantId || '',
-                      lastMessage: chatData?.lastMessage || '',
-                      lastMessageTime: chatData?.lastMessageTime || chatRefData.createdAt,
-                      lastMessageSenderName: chatData?.lastMessageSenderName || '',
-                      createdAt: chatRefData.createdAt,
-                    })
-
-                    // Update state with latest chats
-                    setChats(Array.from(chatsMap.values()))
-                  }
-                },
-                (err) => {
-                  console.error(`Error listening to chat ${chatId}:`, err)
-                }
-              )
-
-              chatUnsubscribers.set(chatId, unsubChat)
+            chatsMap.set(chatId, {
+              chatId,
+              participantName:      ref.participantName   || 'Unknown',
+              participantId:        ref.participantId     || '',
+              lastMessage:          '',
+              lastMessageTime:      ref.lastMessageTime   ?? null,
+              lastMessageSenderName: '',
+              createdAt:            ref.createdAt         ?? null,
+              unreadCount:          0,
             })
 
-            // Set initial state
-            setChats(Array.from(chatsMap.values()))
-            setLoading(false)
-          },
-          (err) => {
-            console.error('Error listening to chats:', err)
-            setError('Failed to load chats')
-            setLoading(false)
-          }
-        )
-      } catch (err: any) {
-        console.error('Error setting up chat listeners:', err)
-        setError(err.message || 'Failed to load chats')
-        setLoading(false)
-      }
+            // ── Listen to main chat doc for lastMessage / lastMessageTime ──
+            const unsubChat = onSnapshot(
+              doc(db, 'chats', chatId),
+              (chatDoc) => {
+                if (!chatDoc.exists()) return
+                const d = chatDoc.data()!
+                const existing = chatsMap.get(chatId)!
+                chatsMap.set(chatId, {
+                  ...existing,
+                  lastMessage:          d?.lastMessage          || '',
+                  lastMessageTime:      d?.lastMessageTime      ?? existing.lastMessageTime,
+                  lastMessageSenderName: d?.lastMessageSenderName || '',
+                })
+                setChats(sortChats(Array.from(chatsMap.values())))
+              },
+              (err) => console.error(`Error listening to chat ${chatId}:`, err)
+            )
+            chatUnsubscribers.set(chatId, unsubChat)
+
+            // ── Listen to unseen messages (sent by others) for unread count ─
+            const msgsRef = collection(db, 'chats', chatId, 'messages')
+            const unseenQ = query(
+              msgsRef,
+              where('seen', '==', false),
+              where('senderId', '!=', user.uid)
+            )
+            const unsubUnseen = onSnapshot(
+              unseenQ,
+              (unseenSnap) => {
+                const existing = chatsMap.get(chatId)!
+                chatsMap.set(chatId, { ...existing, unreadCount: unseenSnap.size })
+                setChats(sortChats(Array.from(chatsMap.values())))
+              },
+              (err) => console.error(`Unread count error for ${chatId}:`, err)
+            )
+            unreadUnsubscribers.set(chatId, unsubUnseen)
+          })
+
+          setChats(sortChats(Array.from(chatsMap.values())))
+          setLoading(false)
+        },
+        (err) => {
+          console.error('Error listening to chats:', err)
+          setError('Failed to load chats')
+          setLoading(false)
+        }
+      )
     })
 
     return () => {
       unsubscribeAuth()
-      if (unsubscribeSnapshot) {
-        unsubscribeSnapshot()
-      }
-      chatUnsubscribers.forEach(unsub => unsub())
-      chatUnsubscribers.clear()
+      unsubscribeSnapshot?.()
+      chatUnsubscribers.forEach(u => u())
+      unreadUnsubscribers.forEach(u => u())
     }
-  }, [])
+  }, [sortChats])
 
   if (loading) {
     return (
@@ -159,37 +172,61 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
 
   return (
     <div className="space-y-2">
-      {chats.map((chat) => (
-        <Card
-          key={chat.chatId}
-          className={`p-4 cursor-pointer transition-colors ${
-            selectedChatId === chat.chatId
-              ? 'bg-primary/10 border-primary'
-              : 'hover:bg-muted/50'
-          }`}
-          onClick={() => onSelectChat(chat.chatId)}
-        >
-          <div className="flex justify-between items-start mb-2">
-            <h3 className="font-semibold text-foreground text-sm">
-              {chat.participantName || `Chat: ${chat.chatId.slice(0, 8)}`}
-            </h3>
-            {chat.lastMessageTime && (
-              <span className="text-xs text-muted-foreground">
-                {formatRelativeTime(chat.lastMessageTime)}
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground truncate">
-            {chat.lastMessageSenderName ? (
-              <span>
-                <strong>{chat.lastMessageSenderName}:</strong> {chat.lastMessage || 'No messages yet'}
-              </span>
-            ) : (
-              chat.lastMessage || 'No messages yet'
-            )}
-          </p>
-        </Card>
-      ))}
+      {chats.map((chat) => {
+        const hasUnread = chat.unreadCount > 0
+        return (
+          <Card
+            key={chat.chatId}
+            className={`p-4 cursor-pointer transition-colors ${
+              selectedChatId === chat.chatId
+                ? 'bg-primary/10 border-primary'
+                : hasUnread
+                ? 'bg-primary/5 border-primary/30 hover:bg-primary/10'
+                : 'hover:bg-muted/50'
+            }`}
+            onClick={() => onSelectChat(chat.chatId)}
+          >
+            <div className="flex justify-between items-start mb-1.5">
+              {/* Name + unread badge */}
+              <div className="flex items-center gap-2 min-w-0">
+                <h3 className={`font-semibold text-sm truncate ${hasUnread ? 'text-foreground' : 'text-foreground/80'}`}>
+                  {chat.participantName || `Chat: ${chat.chatId.slice(0, 8)}`}
+                </h3>
+                {hasUnread && (
+                  <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                    {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
+                  </span>
+                )}
+              </div>
+
+              {/* Timestamp */}
+              {chat.lastMessageTime && (
+                <span className="text-xs text-muted-foreground shrink-0 ml-2">
+                  {formatRelativeTime(chat.lastMessageTime)}
+                </span>
+              )}
+            </div>
+
+            {/* Last message preview + seen eye */}
+            <div className="flex items-center gap-1.5">
+              <p className={`text-sm truncate flex-1 ${hasUnread ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                {chat.lastMessageSenderName ? (
+                  <span>
+                    <strong>{chat.lastMessageSenderName}:</strong>{' '}
+                    {chat.lastMessage || 'No messages yet'}
+                  </span>
+                ) : (
+                  chat.lastMessage || 'No messages yet'
+                )}
+              </p>
+              {/* Eye icon — shown when last message is read (no unread) and there IS a last message */}
+              {!hasUnread && chat.lastMessage && (
+                <Eye className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
+              )}
+            </div>
+          </Card>
+        )
+      })}
     </div>
   )
 }

@@ -4,14 +4,15 @@
 // Shows a friendly bottom sheet asking for notification permission.
 // Rendered on BOTH buyer chat (/chat) and seller chat (/creator/chat).
 //
+// iOS PWA fix: getToken() must use the FCM SW's unique scope so Firebase
+// associates the token with the correct service worker registration.
+//
 // Behaviour:
 //  - On mount: if permission is already 'granted' → silently register token.
-//  - If permission is 'denied' → do nothing (browser already blocked it).
-//  - If permission is 'default' → show the prompt card after a 1.5s settle delay,
+//  - If permission is 'denied' → do nothing.
+//  - If permission is 'default' → show the prompt after a 1.5s settle delay,
 //    UNLESS the user already dismissed it this session (sessionStorage flag).
-//    We use sessionStorage (not localStorage) so it re-prompts each new visit
-//    until they actually grant or deny it at the OS level.
-//  - Foreground messages → shown as Sonner toasts instead of native notifs.
+//  - Foreground messages → shown as Sonner toasts.
 
 import { useEffect, useState } from 'react'
 import { getToken, onMessage } from 'firebase/messaging'
@@ -22,6 +23,9 @@ import { Button } from '@/components/ui/button'
 
 const VAPID_KEY   = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || ''
 const SESSION_KEY = 'umart_notif_dismissed'
+// Must match the scope used in ServiceWorkerRegistrar
+const FCM_SW_URL  = '/firebase-messaging-sw.js'
+const FCM_SW_SCOPE = '/firebase-messaging-sw/'
 
 type PromptState = 'idle' | 'prompting' | 'done'
 
@@ -36,21 +40,14 @@ export function FcmPermissionPrompt() {
     const perm = Notification.permission
 
     if (perm === 'granted') {
-      // Already granted — silently ensure token is registered
       registerTokenSilently()
       return
     }
-
-    if (perm === 'denied') {
-      // User blocked notifications at OS level — nothing we can do
-      return
-    }
+    if (perm === 'denied') return
 
     // perm === 'default' — can still ask
-    // Don't re-prompt if the user dismissed this session
     if (sessionStorage.getItem(SESSION_KEY)) return
 
-    // Small delay so the page fully settles before the card slides in
     const t = setTimeout(() => setState('prompting'), 1500)
     return () => clearTimeout(t)
   }, [])
@@ -63,7 +60,7 @@ export function FcmPermissionPrompt() {
       unsub = onMessage(messaging, (payload) => {
         const title = payload.notification?.title ?? 'New message'
         const body  = payload.notification?.body  ?? ''
-        const url   = (payload.data?.url as string) ?? '/'
+        const url   = (payload.data?.url as string) ?? '/chat'
         toast(title, {
           description: body,
           action: {
@@ -76,26 +73,44 @@ export function FcmPermissionPrompt() {
     return () => unsub?.()
   }, [])
 
-  // ── Silently register FCM token (called when already granted) ─────────────
+  // ── Get the FCM SW registration (unique scope) ────────────────────────────
+  const getFcmSwRegistration = async (): Promise<ServiceWorkerRegistration | undefined> => {
+    if (!('serviceWorker' in navigator)) return undefined
+    // Look for an already-registered FCM SW by its scope
+    const regs = await navigator.serviceWorker.getRegistrations()
+    const existing = regs.find((r) => r.scope.includes('firebase-messaging-sw'))
+    if (existing) return existing
+    // Not registered yet — register it now (edge case on first load)
+    return navigator.serviceWorker.register(FCM_SW_URL, { scope: FCM_SW_SCOPE })
+  }
+
+  // ── Silently register FCM token ────────────────────────────────────────────
   const registerTokenSilently = async () => {
     try {
       const messaging = await getFirebaseMessaging()
       if (!messaging || !VAPID_KEY) return
-      const token = await getToken(messaging, { vapidKey: VAPID_KEY })
+
+      const swReg = await getFcmSwRegistration()
+
+      const token = await getToken(messaging, {
+        vapidKey: VAPID_KEY,
+        // Providing serviceWorkerRegistration ensures iOS uses the correct SW
+        ...(swReg ? { serviceWorkerRegistration: swReg } : {}),
+      })
       if (token) await saveToken(token)
-    } catch {
-      // Non-critical — ignore
+    } catch (err) {
+      console.warn('[FCM] Token registration error:', err)
     }
   }
 
-  // ── User clicked "Alright!" ───────────────────────────────────────────────
+  // ── User clicked "Allow" ──────────────────────────────────────────────────
   const handleAllow = async () => {
     setRequesting(true)
     try {
       const permission = await Notification.requestPermission()
       if (permission === 'granted') {
         await registerTokenSilently()
-        toast.success('Notifications enabled! You\'ll never miss a message.')
+        toast.success("Notifications enabled! You'll never miss a message.")
       }
     } catch (err) {
       console.error('[FCM] Permission request error:', err)

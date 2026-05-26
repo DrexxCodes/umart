@@ -1,11 +1,16 @@
 'use client'
-// Registers the PWA service worker (sw.js) AND the Firebase Messaging service
-// worker (firebase-messaging-sw.js).
+// components/service-worker-registrar.tsx
 //
-// The Firebase Messaging SW lives at a static path and cannot read
-// NEXT_PUBLIC_* env vars at build time. We solve this by posting the Firebase
-// config to the SW via postMessage immediately after registration, so it can
-// call firebase.initializeApp() on its own scope.
+// Registers:
+//   1. /sw.js               — PWA cache service worker  (scope: /)
+//   2. /firebase-messaging-sw.js — FCM push SW          (scope: /firebase-messaging-sw/)
+//
+// KEY iOS FIX: The two SWs use DIFFERENT scopes so they never conflict.
+// firebase-messaging-sw.js is at scope /firebase-messaging-sw/ which means
+// it won't intercept page fetches but WILL receive push events from FCM.
+//
+// Config injection: We post the Firebase config via postMessage immediately
+// after registration AND whenever the controller changes (covers iOS reload).
 
 import { useEffect } from 'react'
 
@@ -18,61 +23,74 @@ const FIREBASE_CONFIG = {
   appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID             ?? '',
 }
 
-function postConfigToSW(reg: ServiceWorkerRegistration) {
-  const target = reg.installing ?? reg.waiting ?? reg.active
-  if (!target) return
-
-  const send = () =>
-    target.postMessage({ type: 'FIREBASE_CONFIG', config: FIREBASE_CONFIG })
-
-  if (target.state === 'activated') {
-    send()
+/** Post Firebase config to a specific ServiceWorker instance */
+function postConfig(sw: ServiceWorker) {
+  const msg = { type: 'FIREBASE_CONFIG', config: FIREBASE_CONFIG }
+  if (sw.state === 'activated') {
+    sw.postMessage(msg)
   } else {
-    target.addEventListener('statechange', function handler() {
+    sw.addEventListener('statechange', function handler() {
       if (this.state === 'activated') {
-        send()
-        target.removeEventListener('statechange', handler)
+        sw.postMessage(msg)
+        sw.removeEventListener('statechange', handler)
       }
     })
   }
+}
+
+/** Post config to whichever worker is most alive in the registration */
+function postConfigToReg(reg: ServiceWorkerRegistration) {
+  const target = reg.active ?? reg.waiting ?? reg.installing
+  if (target) postConfig(target)
 }
 
 export function ServiceWorkerRegistrar() {
   useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return
 
-    // 1. Register the PWA service worker
+    // 1. Register the PWA cache SW at scope /
     navigator.serviceWorker
       .register('/sw.js', { scope: '/' })
       .then((reg) => {
-        console.log('[SW] PWA service worker registered, scope:', reg.scope)
+        console.log('[SW] PWA cache worker registered, scope:', reg.scope)
       })
       .catch((err) => {
-        console.warn('[SW] PWA service worker registration failed:', err)
+        console.warn('[SW] PWA cache worker registration failed:', err)
       })
 
-    // 2. Register Firebase Messaging SW and inject config via postMessage
+    // 2. Register FCM SW at a UNIQUE scope so it never conflicts with sw.js
     navigator.serviceWorker
-      .register('/firebase-messaging-sw.js', { scope: '/' })
+      .register('/firebase-messaging-sw.js', { scope: '/firebase-messaging-sw/' })
       .then((reg) => {
-        console.log('[FCM SW] Firebase messaging SW registered')
-        postConfigToSW(reg)
+        console.log('[FCM SW] Firebase messaging SW registered, scope:', reg.scope)
+        postConfigToReg(reg)
 
-        // Also post config when SW updates
+        // Re-inject config when the SW updates (e.g. after deploy)
         reg.addEventListener('updatefound', () => {
-          postConfigToSW(reg)
+          postConfigToReg(reg)
         })
       })
       .catch((err) => {
         console.warn('[FCM SW] Firebase messaging SW registration failed:', err)
       })
 
-    // 3. Post config to any already-active SW controller (e.g. after page reload)
-    if (navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'FIREBASE_CONFIG',
-        config: FIREBASE_CONFIG,
-      })
+    // 3. On iOS Safari, after a page reload the SW controller is already active.
+    //    Post config to it immediately so background push keeps working.
+    const sendToController = () => {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'FIREBASE_CONFIG',
+          config: FIREBASE_CONFIG,
+        })
+      }
+    }
+    sendToController()
+
+    // 4. Re-send config whenever the controlling SW changes (new SW activated)
+    navigator.serviceWorker.addEventListener('controllerchange', sendToController)
+
+    return () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', sendToController)
     }
   }, [])
 
