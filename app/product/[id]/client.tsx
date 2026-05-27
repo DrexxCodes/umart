@@ -78,7 +78,8 @@ export function ProductDetailClient({ product }: Props) {
       })
       const result = await res.json()
       if (result.success) {
-        router.push('/chat')
+        const chatId = result.data?.chatId
+        router.push(chatId ? `/chat?open=${chatId}` : '/chat')
       } else {
         setContactError(result.error ?? 'Failed to create chat. Please try again.')
       }

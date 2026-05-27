@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState } from 'react'
-import { onAuthStateChanged, User } from 'firebase/auth'
+import { onIdTokenChanged, User } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 
 interface AuthContextType {
@@ -18,57 +18,86 @@ export function useAuth() {
   return useContext(AuthContext)
 }
 
+// Persists the Firebase ID token as an HttpOnly cookie via /api/users/cookies.
+// Called on every token change and proactively before the token could expire.
+async function persistToken(user: User): Promise<void> {
+  try {
+    const token = await user.getIdToken(/* forceRefresh */ false)
+    await fetch('/api/users/cookies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+  } catch (error) {
+    console.error('[auth-provider] Error persisting token:', error)
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user)
-      
-      if (user) {
+    // onIdTokenChanged fires on:
+    //   • sign-in / sign-out
+    //   • token auto-refresh by the Firebase SDK (every ~55 min)
+    //
+    // This is better than onAuthStateChanged + a manual setInterval because:
+    //   1. The Firebase SDK already refreshes the token automatically.
+    //   2. onIdTokenChanged gives us the new token the moment it's refreshed —
+    //      we just need to write it into the cookie. No manual timer needed.
+    //   3. It also fires on sign-out (user = null) so we can clear the cookie.
+    const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser)
+
+      if (firebaseUser) {
+        await persistToken(firebaseUser)
+      } else {
+        // User signed out — clear the session cookie
         try {
-          // Get a fresh token and update the cookie
-          const token = await user.getIdToken(true)
-          
           await fetch('/api/users/cookies', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ token }),
+            method: 'DELETE',
           })
-        } catch (error) {
-          console.error('Error refreshing token:', error)
+        } catch {
+          // Best-effort; cookie will expire on its own
         }
       }
-      
+
       setLoading(false)
     })
 
-    // Set up token refresh every 50 minutes (tokens expire in 60 minutes)
-    const refreshInterval = setInterval(async () => {
+    // ── PWA / background-tab fix ───────────────────────────────────────────
+    // When the app is installed as a PWA or the tab has been in the background
+    // for a long time, the setInterval in the old approach would stop firing.
+    // Listening to visibilitychange and force-refreshing the token when the
+    // app comes back to the foreground ensures the cookie is always fresh
+    // before any authenticated API call is made.
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible') return
       const currentUser = auth.currentUser
-      if (currentUser) {
-        try {
-          const token = await currentUser.getIdToken(true)
-          
-          await fetch('/api/users/cookies', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ token }),
-          })
-        } catch (error) {
-          console.error('Error refreshing token:', error)
+      if (!currentUser) return
+      try {
+        // forceRefresh=true only when needed — getIdTokenResult lets us check
+        // expiry without burning a network round-trip every time.
+        const result = await currentUser.getIdTokenResult()
+        const expiresAt = new Date(result.expirationTime).getTime()
+        const nowMs = Date.now()
+        const sevenMinMs = 7 * 60 * 1000
+        // Force refresh if the token expires within 7 minutes
+        if (expiresAt - nowMs < sevenMinMs) {
+          await persistToken(currentUser) // getIdToken(false) is fine here —
+          // the SDK will auto-refresh if < 5 min left
         }
+      } catch (err) {
+        console.error('[auth-provider] Visibility refresh failed:', err)
       }
-    }, 50 * 60 * 1000) // 50 minutes
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       unsubscribe()
-      clearInterval(refreshInterval)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
 

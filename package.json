@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "dev:trigger": "npx trigger.dev@latest dev",
+    "build:trigger": "npx trigger.dev@latest deploy --env prod",
     "start": "next start",
     "lint": "biome check",
     "format": "biome format --write"

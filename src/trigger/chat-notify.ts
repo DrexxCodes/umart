@@ -1,19 +1,18 @@
 // trigger/chat-notify.ts
 //
-// Trigger.dev v3 task — debounced FCM push notification for chat messages.
+// Trigger.dev v3 task — immediate FCM push notification for chat messages.
 //
 // Flow:
-//   1. api/chat/send calls tasks.trigger('chat-notify', payload) on the first
-//      message in a burst (messageCount goes 0 → 1).
-//   2. This task waits 20 seconds durably (survives Vercel timeouts).
+//   1. api/chat/send calls tasks.trigger('chat-notify', payload).
+//   2. This task fires immediately — NO debounce wait.
 //   3. Reads the pendingNotifications doc from Firestore.
 //   4. If still there → recipient hasn't opened the chat → send FCM push.
-//   5. If gone → recipient opened the chat, seen route cleared it → no-op.
+//   5. If gone → recipient opened the chat (seen route cleared it) → no-op.
 //
 // IMPORTANT — env vars required in Trigger.dev dashboard:
 //   FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
 
-import { task, wait, logger } from '@trigger.dev/sdk/v3'
+import { task, logger } from '@trigger.dev/sdk/v3'
 import * as admin from 'firebase-admin'
 
 // ── Firebase Admin init ───────────────────────────────────────────────────────
@@ -58,8 +57,8 @@ export const chatNotifyTask = task({
 
   retry: {
     maxAttempts: 2,
-    minTimeoutInMs: 5_000,
-    maxTimeoutInMs: 15_000,
+    minTimeoutInMs: 3_000,
+    maxTimeoutInMs: 10_000,
   },
 
   run: async (payload: ChatNotifyPayload) => {
@@ -67,25 +66,20 @@ export const chatNotifyTask = task({
 
     logger.info('chat-notify started', { notifDocId, chatId, recipientId, senderName })
 
-    // ── 1. Wait 20 seconds durably ────────────────────────────────────────────
-    await wait.for({ seconds: 20 })
-    logger.info('30s wait complete, checking pendingNotifications doc')
-
-    // ── 2. Init Firebase Admin ────────────────────────────────────────────────
+    // ── 1. Init Firebase Admin ────────────────────────────────────────────────
     initAdmin()
     const db = admin.firestore()
 
-    // ── 3. Read the pendingNotifications doc ──────────────────────────────────
+    // ── 2. Read the pendingNotifications doc ──────────────────────────────────
     const docRef = db.collection('pendingNotifications').doc(notifDocId)
     const doc    = await docRef.get()
 
     if (!doc.exists) {
-      logger.info('Pending doc already cleared — user opened the chat before 30s', { notifDocId })
+      // Recipient already opened the chat — nothing to do.
+      logger.info('Pending doc already cleared — user opened the chat', { notifDocId })
       return { sent: false, reason: 'cleared' }
     }
 
-    // Read ALL fields from the doc — recipientId comes from the doc itself,
-    // not the payload, to ensure we're using the exact value Firestore wrote.
     const docData = doc.data()!
     logger.info('Pending doc contents', { docData })
 
@@ -98,9 +92,7 @@ export const chatNotifyTask = task({
       return { sent: false, reason: 'missing-recipient-id' }
     }
 
-    // ── 4. Look up recipient's FCM tokens from users/{uid}.fcmTokens ─────────
-    // The FCM register API (app/api/fcm/register/route.ts) stores tokens at:
-    //   users/{uid} → fcmTokens: string[]   (via FieldValue.arrayUnion)
+    // ── 3. Look up recipient's FCM tokens ─────────────────────────────────────
     logger.info('Looking up FCM tokens', { uid: confirmedRecipientId })
 
     const userDoc = await db.collection('users').doc(confirmedRecipientId).get()
@@ -111,12 +103,10 @@ export const chatNotifyTask = task({
       return { sent: false, reason: 'user-not-found' }
     }
 
-    logger.info('User doc found', { userData: userDoc.data() })
-
     const tokens: string[] = userDoc.data()?.fcmTokens ?? []
 
     if (tokens.length === 0) {
-      logger.warn('User has no FCM tokens — they have not granted notification permission', {
+      logger.warn('User has no FCM tokens — notification permission not granted', {
         uid: confirmedRecipientId,
       })
       await docRef.delete()
@@ -125,13 +115,13 @@ export const chatNotifyTask = task({
 
     logger.info('FCM tokens found', { count: tokens.length })
 
-    // ── 5. Build the notification body ────────────────────────────────────────
+    // ── 4. Build the notification body ────────────────────────────────────────
     const body =
       messageCount === 1
         ? `${senderName} sent you a message`
         : `${senderName} sent you ${messageCount} messages`
 
-    // ── 6. Send FCM multicast push ────────────────────────────────────────────
+    // ── 5. Send FCM multicast push ────────────────────────────────────────────
     const message: admin.messaging.MulticastMessage = {
       tokens,
       notification: {
@@ -151,7 +141,6 @@ export const chatNotifyTask = task({
           link: '/chat',
         },
       },
-      // data values must all be strings
       data: {
         url:    '/chat',
         chatId: chatId,
@@ -166,7 +155,7 @@ export const chatNotifyTask = task({
       failureCount: response.failureCount,
     })
 
-    // ── 7. Log failures and prune stale tokens ────────────────────────────────
+    // ── 6. Prune stale tokens ─────────────────────────────────────────────────
     const stale: string[] = []
     response.responses.forEach((res, i) => {
       if (!res.success) {
@@ -192,9 +181,9 @@ export const chatNotifyTask = task({
       })
     }
 
-    // ── 8. Clear the pending doc ──────────────────────────────────────────────
+    // ── 7. Clear the pending doc ──────────────────────────────────────────────
     await docRef.delete()
-    logger.info('Pending doc cleared')
+    logger.info('Push sent and pending doc cleared')
 
     return {
       sent:         response.successCount > 0,

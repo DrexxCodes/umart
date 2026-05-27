@@ -54,9 +54,20 @@ export async function POST(req: NextRequest) {
     }
 
     // Clear any pending push notification for this user + chat so they
-    // don't get a late-firing notification for messages they already read
+    // don't get a late-firing notification for messages they already read.
+    // Also reset the unreadCount counter on the userChats sub-doc so the
+    // badge clears instantly on the sender's view of the recipient's chat.
     const notifDocId = `${chatId}_${userId}`
-    await adminDb.collection('pendingNotifications').doc(notifDocId).delete().catch(() => {})
+    await Promise.all([
+      adminDb.collection('pendingNotifications').doc(notifDocId).delete().catch(() => {}),
+      adminDb
+        .collection('users')
+        .doc(userId)
+        .collection('chats')
+        .doc(chatId)
+        .update({ unreadCount: 0 })
+        .catch(() => {}),
+    ])
 
     return NextResponse.json({ success: true, marked: unseenSnap.size })
   } catch (error: any) {

@@ -3,8 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import {
-  collection, query, orderBy, onSnapshot, doc,
-  where, type Timestamp,
+  collection, query, orderBy, onSnapshot, doc, type Timestamp, type DocumentData,
 } from 'firebase/firestore'
 import { auth, db } from '@/lib/firebase'
 import { formatRelativeTime } from '@/lib/timestamp'
@@ -63,7 +62,7 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
 
       unsubscribeSnapshot = onSnapshot(
         q,
-        (snapshot) => {
+        (snapshot: DocumentData) => {
           if (snapshot.empty) { setChats([]); setLoading(false); return }
 
           // Clean up old per-chat listeners before rebuilding
@@ -74,10 +73,11 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
 
           const chatsMap = new Map<string, ChatItem>()
 
-          snapshot.docs.forEach((chatRefDoc) => {
+          snapshot.docs.forEach((chatRefDoc: DocumentData) => {
             const ref = chatRefDoc.data()
             const chatId = ref.chatId as string
 
+            // ── Seed from sub-doc immediately (includes unreadCount) ─────
             chatsMap.set(chatId, {
               chatId,
               participantName:       ref.participantName   || 'Unknown',
@@ -86,7 +86,10 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
               lastMessageTime:       ref.lastMessageTime   ?? null,
               lastMessageSenderName: '',
               createdAt:             ref.createdAt         ?? null,
-              unreadCount:           0,
+              // Read unreadCount from the userChats sub-doc directly.
+              // api/chat/send increments this via FieldValue.increment so it
+              // updates the instant a message is sent — no extra query needed.
+              unreadCount:           (ref.unreadCount as number) ?? 0,
             })
 
             // ── Listen to main chat doc for lastMessage / lastMessageTime ──
@@ -106,26 +109,25 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
                 })
                 setChats(sortChats(Array.from(chatsMap.values())))
               },
-              (err) => console.error(`Error listening to chat ${chatId}:`, err)
+              (err: unknown) => console.error(`Error listening to chat ${chatId}:`, err)
             )
             chatUnsubscribers.set(chatId, unsubChat)
 
-            // ── Listen to unseen messages (sent by others) for unread count ─
-            const msgsRef = collection(db, 'chats', chatId, 'messages')
-            const unseenQ = query(
-              msgsRef,
-              where('seen', '==', false),
-              where('senderId', '!=', user.uid)
-            )
+            // ── Listen to the userChats sub-doc for real-time unreadCount ─
+            // This single-doc listener is cheap and fires the instant
+            // api/chat/send writes FieldValue.increment(1) to it.
+            // No subcollection query over messages needed.
             const unsubUnseen = onSnapshot(
-              unseenQ,
-              (unseenSnap) => {
+              doc(db, 'users', user.uid, 'chats', chatId),
+              (subDoc) => {
                 const existing = chatsMap.get(chatId)
-                if (!existing) return
-                chatsMap.set(chatId, { ...existing, unreadCount: unseenSnap.size })
+                if (!existing || !subDoc.exists()) return
+                const count = (subDoc.data()?.unreadCount as number) ?? 0
+                if (existing.unreadCount === count) return // no change
+                chatsMap.set(chatId, { ...existing, unreadCount: count })
                 setChats(sortChats(Array.from(chatsMap.values())))
               },
-              (err) => console.error(`Unread count error for ${chatId}:`, err)
+              (err: unknown) => console.error(`Unread count error for ${chatId}:`, err)
             )
             unreadUnsubscribers.set(chatId, unsubUnseen)
           })

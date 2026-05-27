@@ -36,3 +36,14 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export async function DELETE() {
+  try {
+    const cookieStore = await cookies()
+    cookieStore.delete('__session')
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    console.error('Error clearing session cookie:', error)
+    return NextResponse.json({ error: 'Failed to clear cookie' }, { status: 500 })
+  }
+}

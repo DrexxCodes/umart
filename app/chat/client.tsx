@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { ChatList } from './components/ChatList'
 import { ChatArea } from './components/ChatArea'
 import { ChevronLeft } from 'lucide-react'
@@ -11,11 +11,25 @@ import { Button } from '@/components/ui/button'
 import { FcmPermissionPrompt } from '@/components/fcm-permission-prompt'
 
 export function ChatClient() {
-  const router = useRouter()
+  const router       = useRouter()
+  const searchParams = useSearchParams()
   const [selectedChatId, setSelectedChatId] = useState<string | undefined>()
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showChatListMobile, setShowChatListMobile] = useState(true)
+
+  // Auto-open chat when ?open=<chatId> is present in the URL (e.g. redirected
+  // from the product page after calling /api/chat/create).
+  // We read from window.location directly to avoid stale closure issues.
+  useEffect(() => {
+    const openId = new URLSearchParams(window.location.search).get('open')
+    if (openId) {
+      setSelectedChatId(openId)
+      setShowChatListMobile(false)
+      // Clean the URL so a refresh doesn't re-select
+      router.replace('/chat')
+    }
+  }, [router])
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {

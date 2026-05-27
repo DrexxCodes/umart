@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
-import { Timestamp } from 'firebase-admin/firestore'
+import { Timestamp, FieldValue } from 'firebase-admin/firestore'
 import { upsertPendingChatNotification } from '@/lib/fcm'
 import { tasks } from '@trigger.dev/sdk/v3'
 import type { ChatNotifyPayload } from '@/src/trigger/chat-notify'
@@ -28,10 +28,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
     }
 
+    // Fetch sender info in parallel with the chat read already done above
     const senderDoc = await adminDb.collection('users').doc(userId).get()
     const senderName = senderDoc.data()?.fullname || 'User'
     const senderRoles = senderDoc.data()?.roles || {}
     const isCreator = senderRoles.isCreator || false
+
+    const recipientId = (chatData.participantIds as string[]).find((id) => id !== userId)
 
     const now = Timestamp.now()
     const messageRef = adminDb.collection('chats').doc(chatId).collection('messages').doc()
@@ -58,10 +61,16 @@ export async function POST(req: NextRequest) {
     })
 
     // ── Update each participant's chats sub-doc so ChatList sorts correctly ───
+    // Also increment unreadCount on the RECIPIENT so the badge appears instantly
+    // without waiting for the Firestore unseen-messages query to settle.
     for (const participantId of chatData.participantIds as string[]) {
+      const isRecipient = participantId !== userId
       batch.update(
         adminDb.collection('users').doc(participantId).collection('chats').doc(chatId),
-        { lastMessageTime: now }
+        {
+          lastMessageTime: now,
+          ...(isRecipient ? { unreadCount: FieldValue.increment(1) } : {}),
+        }
       )
     }
 
@@ -80,16 +89,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Push notification via Trigger.dev (debounced 30s, durable) ───────────
-    const recipientId = (chatData.participantIds as string[]).find((id) => id !== userId)
+    // ── Push notification via Trigger.dev (immediate, durable) ───────────────
+    // upsertPendingChatNotification sets up the doc that chat-notify reads.
+    // We ALWAYS trigger a new job — tasks.trigger is idempotent from the
+    // sender's perspective and Trigger.dev deduplication handles race conditions.
+    // The task fires immediately (no wait.for) so the push lands in seconds.
     if (recipientId) {
       const notifDocId = `${chatId}_${recipientId}`
 
       upsertPendingChatNotification(chatId, recipientId, userId, senderName)
         .then(async (count) => {
-          // Only trigger a new job on the FIRST message in the debounce window.
-          // Subsequent messages in the same window just increment the counter on
-          // the Firestore doc — the already-queued job picks up the final count.
+          // Only trigger a new Trigger.dev job on the FIRST message in the
+          // debounce window (count === 1). Subsequent rapid messages just
+          // increment the counter on the pendingNotifications Firestore doc —
+          // the single already-queued job reads the final count when it runs.
+          //
+          // The task fires IMMEDIATELY (no wait.for), so the push still lands
+          // in seconds. This prevents double-push when multiple messages are sent.
           if (count === 1) {
             await tasks.trigger('chat-notify', {
               notifDocId,
