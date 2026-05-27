@@ -67,8 +67,11 @@ export function FcmPermissionPrompt() {
   }, [])
 
   // ── Register FCM token ────────────────────────────────────────────────────
-  // getToken() automatically uses the SW that controls the page (scope '/').
-  // No need to pass serviceWorkerRegistration manually.
+  // ── Register FCM token ────────────────────────────────────────────────────
+  // We explicitly pass the SW registration to getToken() so FCM doesn't do
+  // its own internal SW lookup, which can race against our registration —
+  // especially on iOS where SW setup is slower. This is the primary fix for
+  // "push sometimes works, sometimes doesn't".
   const registerTokenSilently = async () => {
     try {
       const messaging = await getFirebaseMessaging()
@@ -77,10 +80,15 @@ export function FcmPermissionPrompt() {
         return
       }
 
-      // Wait for the SW to be ready before requesting a token
-      await navigator.serviceWorker.ready
+      // Grab the registration handle explicitly so we pass it to getToken.
+      // navigator.serviceWorker.ready resolves once the SW is active and
+      // controlling the page — safe to use as the source-of-truth registration.
+      const swRegistration = await navigator.serviceWorker.ready
 
-      const token = await getToken(messaging, { vapidKey: VAPID_KEY })
+      const token = await getToken(messaging, {
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: swRegistration,
+      })
       if (token) {
         console.log('[FCM] Token obtained, saving...')
         await saveToken(token)

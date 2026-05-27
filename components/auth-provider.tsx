@@ -77,16 +77,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const currentUser = auth.currentUser
       if (!currentUser) return
       try {
-        // forceRefresh=true only when needed — getIdTokenResult lets us check
-        // expiry without burning a network round-trip every time.
         const result = await currentUser.getIdTokenResult()
         const expiresAt = new Date(result.expirationTime).getTime()
         const nowMs = Date.now()
-        const sevenMinMs = 7 * 60 * 1000
-        // Force refresh if the token expires within 7 minutes
-        if (expiresAt - nowMs < sevenMinMs) {
-          await persistToken(currentUser) // getIdToken(false) is fine here —
-          // the SDK will auto-refresh if < 5 min left
+        const fiveMinMs = 5 * 60 * 1000
+        // Force refresh if the token is expired or expires within 5 minutes.
+        // This covers the PWA-killed-and-reopened case where the token may
+        // already be past expiry by the time we get the visibilitychange event.
+        if (expiresAt - nowMs < fiveMinMs) {
+          const token = await currentUser.getIdToken(/* forceRefresh */ true)
+          await fetch('/api/users/cookies', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          })
         }
       } catch (err) {
         console.error('[auth-provider] Visibility refresh failed:', err)

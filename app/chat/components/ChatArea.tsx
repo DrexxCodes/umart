@@ -165,6 +165,11 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
 
   // ── Real-time message listener + cache + seen mark ────────────────────────
   useEffect(() => {
+    // Reset seen-guard whenever chatId changes (including to undefined).
+    // Without this, switching away and back to the same chat won't re-call
+    // markAsSeen, so unreadCount never resets to 0 on subsequent opens.
+    seenMarkedForRef.current = null
+
     if (!chatId) {
       setMessages([])
       setChatInfo(null)
@@ -172,7 +177,6 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
       setError('')
       initialScrollDone.current = false
       isFirstLoad.current = true
-      seenMarkedForRef.current = null
       return
     }
 

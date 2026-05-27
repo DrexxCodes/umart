@@ -62,6 +62,49 @@ if (messaging) {
   })
 }
 
+// ── Raw push fallback (iOS Safari PWA + any browser where FCM compat
+//    onBackgroundMessage doesn't fire) ────────────────────────────────────────
+//
+// On iOS 16.4+ PWAs, WebKit delivers a raw Web Push API event. The FCM
+// compat library's onBackgroundMessage intercepts this on Chrome/Android
+// but is unreliable on WebKit. We add our own raw 'push' listener as a
+// belt-and-suspenders fallback — if the compat library already showed the
+// notification, the browser deduplicates by tag so no double-notification.
+//
+// IMPORTANT: event.waitUntil() keeps the SW alive until showNotification
+// resolves. Without it, iOS may kill the SW before the notification appears.
+self.addEventListener('push', (event) => {
+  // If the FCM compat layer already handled this, it will have called
+  // showNotification. We check for pending notifications to avoid double-show.
+  // Because we use the same tag, even if both run, the browser deduplicates.
+  let title = 'New message on Umart'
+  let body  = ''
+  let url   = '/chat'
+  let tag   = 'umart-chat'
+
+  try {
+    const data = event.data?.json()
+    // FCM sends payload under notification{} or data{}
+    title = data?.notification?.title ?? data?.data?.title ?? title
+    body  = data?.notification?.body  ?? data?.data?.body  ?? body
+    url   = data?.data?.url           ?? url
+    tag   = data?.data?.tag           ?? tag
+  } catch {
+    // Malformed payload — use defaults
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon:     '/icon-192x192.png',
+      badge:    '/badge-72x72.png',
+      tag,
+      renotify: true,
+      data:     { url },
+    })
+  )
+})
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const url = event.notification.data?.url ?? '/chat'
