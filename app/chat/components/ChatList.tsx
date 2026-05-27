@@ -47,23 +47,26 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
 
   useEffect(() => {
     let unsubscribeSnapshot: (() => void) | null = null
-    const chatUnsubscribers  = new Map<string, () => void>()
+    const chatUnsubscribers   = new Map<string, () => void>()
     const unreadUnsubscribers = new Map<string, () => void>()
 
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (!user) { setLoading(false); return }
 
       const userChatsRef = collection(db, 'users', user.uid, 'chats')
-      // Order by lastMessageTime desc — this field is updated by the send API
-      // so new messages bubble to the top automatically.
-      const q = query(userChatsRef, orderBy('lastMessageTime', 'desc'))
+
+      // NOTE: We intentionally do NOT orderBy here because:
+      //  1. Some docs may not have lastMessageTime yet → Firestore composite index required
+      //  2. We sort client-side in real-time via sortChats() so ordering is always correct
+      //     and updates instantly whenever lastMessageTime changes on the main chat doc.
+      const q = query(userChatsRef)
 
       unsubscribeSnapshot = onSnapshot(
         q,
         (snapshot) => {
           if (snapshot.empty) { setChats([]); setLoading(false); return }
 
-          // Clean up old per-chat listeners
+          // Clean up old per-chat listeners before rebuilding
           chatUnsubscribers.forEach(u => u())
           chatUnsubscribers.clear()
           unreadUnsubscribers.forEach(u => u())
@@ -77,27 +80,29 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
 
             chatsMap.set(chatId, {
               chatId,
-              participantName:      ref.participantName   || 'Unknown',
-              participantId:        ref.participantId     || '',
-              lastMessage:          '',
-              lastMessageTime:      ref.lastMessageTime   ?? null,
+              participantName:       ref.participantName   || 'Unknown',
+              participantId:         ref.participantId     || '',
+              lastMessage:           '',
+              lastMessageTime:       ref.lastMessageTime   ?? null,
               lastMessageSenderName: '',
-              createdAt:            ref.createdAt         ?? null,
-              unreadCount:          0,
+              createdAt:             ref.createdAt         ?? null,
+              unreadCount:           0,
             })
 
             // ── Listen to main chat doc for lastMessage / lastMessageTime ──
+            // This is the source of truth for sorting — updates here trigger re-sort.
             const unsubChat = onSnapshot(
               doc(db, 'chats', chatId),
               (chatDoc) => {
                 if (!chatDoc.exists()) return
                 const d = chatDoc.data()!
-                const existing = chatsMap.get(chatId)!
+                const existing = chatsMap.get(chatId)
+                if (!existing) return
                 chatsMap.set(chatId, {
                   ...existing,
-                  lastMessage:          d?.lastMessage          || '',
-                  lastMessageTime:      d?.lastMessageTime      ?? existing.lastMessageTime,
-                  lastMessageSenderName: d?.lastMessageSenderName || '',
+                  lastMessage:           d.lastMessage          || '',
+                  lastMessageTime:       d.lastMessageTime      ?? existing.lastMessageTime,
+                  lastMessageSenderName: d.lastMessageSenderName || '',
                 })
                 setChats(sortChats(Array.from(chatsMap.values())))
               },
@@ -115,7 +120,8 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
             const unsubUnseen = onSnapshot(
               unseenQ,
               (unseenSnap) => {
-                const existing = chatsMap.get(chatId)!
+                const existing = chatsMap.get(chatId)
+                if (!existing) return
                 chatsMap.set(chatId, { ...existing, unreadCount: unseenSnap.size })
                 setChats(sortChats(Array.from(chatsMap.values())))
               },
@@ -219,7 +225,7 @@ export function ChatList({ selectedChatId, onSelectChat }: ChatListProps) {
                   chat.lastMessage || 'No messages yet'
                 )}
               </p>
-              {/* Eye icon — shown when last message is read (no unread) and there IS a last message */}
+              {/* Eye icon when there are no unread messages and a last message exists */}
               {!hasUnread && chat.lastMessage && (
                 <Eye className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
               )}

@@ -6,6 +6,7 @@ import {
   PackageSearch, Trash2, Loader2,
 } from 'lucide-react'
 import CategoryForm, { CategoryFormData } from './CategoryForm'
+import SubCategoryPanel from './SubCategoryPanel'
 
 export interface Category {
   id: string
@@ -95,7 +96,7 @@ export default function CategoryList({
           key={cat.id}
           className="overflow-hidden rounded-xl border border-border bg-card transition-shadow hover:shadow-sm"
         >
-          {/* ── Row ── */}
+          {/* ── Main row ── */}
           <div className="flex items-center gap-3 p-3.5">
             {/* Thumbnail */}
             <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-muted">
@@ -195,19 +196,21 @@ export default function CategoryList({
               />
             </div>
           )}
+
+          {/* ── Subcategory panel (always rendered per category) ── */}
+          <SubCategoryPanel categoryId={cat.id} token={token} />
         </div>
       ))}
     </div>
   )
 }
 
-// ── Missing fields indicator ──────────────────────────────────────────────
+// ── Missing fields indicator ──────────────────────────────────────────────────
 function MissingFieldsNotice({ cat }: { cat: Category }) {
   const missing: string[] = []
   if (!cat.imageUrl)    missing.push('image')
   if (!cat.description) missing.push('description')
-
-  if (!missing.length) return null
+  if (!missing.length)  return null
 
   return (
     <div className="flex items-center gap-1.5 border-t border-dashed border-amber-400/30 bg-amber-400/5 px-3.5 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">

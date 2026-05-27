@@ -13,3 +13,6 @@ ignoredBuiltDependencies:
 onlyBuiltDependencies:
   - '@firebase/util'
   - protobufjs
+
+overrides:
+  import-in-the-middle: "1.11.2"

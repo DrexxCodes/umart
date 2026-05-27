@@ -33,6 +33,7 @@ interface AIConfig {
 
 interface ProductData {
   category: string
+  subCategory: string
   brand: string
   model: string
   searchKeywords: string[]
@@ -49,6 +50,7 @@ interface ProductData {
 
 const INITIAL_DATA: ProductData = {
   category: '',
+  subCategory: '',
   brand: '',
   model: '',
   searchKeywords: [],

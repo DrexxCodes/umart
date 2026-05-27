@@ -1,128 +1,178 @@
-'use client';
+'use client'
 
-import { useState, useEffect } from 'react';
-import { get, post } from '@/lib/utils/fetcher';
+import { useState, useEffect, useCallback } from 'react'
+import { auth } from '@/lib/firebase'
+import { onAuthStateChanged } from 'firebase/auth'
 
 export interface Message {
-  id: string;
-  senderId: string;
-  sender: 'user' | 'seller';
-  content: string;
-  text: string;
-  timestamp: string;
-  createdAt: string;
+  id: string
+  senderId: string
+  senderName: string
+  text: string
+  createdAt: any
+  isAI?: boolean
+  isCreator?: boolean
+  isSystemAdmin?: boolean
+  seen?: boolean
+  type?: string
+  paymentReferenceId?: string
+  agreedAmount?: number
+  grandPrice?: number
 }
 
-export interface Chat {
-  id: string;
-  participants: string[];
-  lastMessage?: string;
-  lastUpdated: string;
-  unreadCount?: number;
-  unread?: boolean;
-  avatar?: string;
-  sellerName: string;
-  productName: string;
-  timestamp: string;
-  online?: boolean;
-  status?: 'pending' | 'completed' | 'cancelled';
-  price?: number;
+export interface ChatListItem {
+  chatId: string
+  participantName: string
+  participantId: string
+  lastMessage: string
+  lastMessageTime: any
+  lastMessageSenderName?: string
+  createdAt: any
+  unreadCount: number
 }
 
 interface UseChatsResult {
-  chats: Chat[];
-  messages: Record<string, Message[]>;
-  loading: boolean;
-  error: string | null;
-  sendMessage: (chatId: string, text: string) => Promise<void>;
+  chats: ChatListItem[]
+  loading: boolean
+  error: string | null
+  refresh: () => Promise<void>
+}
+
+// Helper — get a Bearer token for the current user (throws if not authed)
+async function getBearerToken(): Promise<string> {
+  const user = auth.currentUser
+  if (!user) throw new Error('Not authenticated')
+  return user.getIdToken()
 }
 
 export function useChats(): UseChatsResult {
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [messages, setMessages] = useState<Record<string, Message[]>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [chats, setChats] = useState<ChatListItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
+
+  // Watch auth state
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUserId(u ? u.uid : null)
+    })
+    return () => unsub()
+  }, [])
+
+  const fetchChats = useCallback(async () => {
+    if (!userId) return
+    try {
+      setLoading(true)
+      setError(null)
+      const token = await getBearerToken()
+      const res = await fetch('/api/chat/list', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const result = await res.json()
+      if (!result.success) throw new Error(result.error || 'Failed to fetch chats')
+      setChats(result.data ?? [])
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch chats')
+    } finally {
+      setLoading(false)
+    }
+  }, [userId])
 
   useEffect(() => {
-    const fetchChats = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await get<Chat[]>('/api/chat/list');
-        setChats(data || []);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch chats');
-      } finally {
-        setLoading(false);
-      }
-    };
+    if (userId) fetchChats()
+  }, [userId, fetchChats])
 
-    fetchChats();
-  }, []);
-
-  const sendMessage = async (chatId: string, text: string) => {
-    try {
-      await post('/api/chat/send-message', { chatId, text });
-      const data = await get<Message[]>(`/api/chat/${chatId}`);
-      setMessages(prev => ({ ...prev, [chatId]: data || [] }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
-      throw err;
-    }
-  };
-
-  return { chats, messages, loading, error, sendMessage };
+  return { chats, loading, error, refresh: fetchChats }
 }
 
 export function useChat(chatId: string) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchMessages = useCallback(async () => {
+    if (!chatId) return
+    try {
+      setLoading(true)
+      setError(null)
+      const token = await getBearerToken()
+      const res = await fetch(`/api/chat/${chatId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const result = await res.json()
+      if (!result.success) throw new Error(result.error || 'Failed to fetch messages')
+      setMessages(result.data?.messages ?? [])
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch messages')
+    } finally {
+      setLoading(false)
+    }
+  }, [chatId])
 
   useEffect(() => {
-    const fetchMessages = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await get<Message[]>(`/api/chat/${chatId}`);
-        setMessages(data || []);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch messages');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (chatId) {
-      fetchMessages();
-    }
-  }, [chatId]);
+    fetchMessages()
+  }, [fetchMessages])
 
   const sendMessage = async (text: string) => {
     try {
-      await post('/api/chat/send-message', { chatId, text });
-      const data = await get<Message[]>(`/api/chat/${chatId}`);
-      setMessages(data || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
-      throw err;
+      const token = await getBearerToken()
+      const res = await fetch('/api/chat/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ chatId, text }),
+      })
+      const result = await res.json()
+      if (!result.success) throw new Error(result.error || 'Failed to send message')
+      // Re-fetch messages after sending
+      await fetchMessages()
+    } catch (err: any) {
+      setError(err.message || 'Failed to send message')
+      throw err
     }
-  };
+  }
 
-  return { messages, loading, error, sendMessage };
+  const markAsSeen = async () => {
+    try {
+      const token = await getBearerToken()
+      await fetch('/api/chat/seen', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ chatId }),
+      })
+    } catch {
+      // Non-critical
+    }
+  }
+
+  return { messages, loading, error, sendMessage, markAsSeen, refresh: fetchMessages }
 }
 
 export function useCreateChat() {
-  const createChat = async (participantUsername: string) => {
-    try {
-      const data = await post<Chat>('/api/chat/create', {
-        participantUsername,
-      });
-      return data;
-    } catch (err) {
-      throw err instanceof Error ? err : new Error('Failed to create chat');
-    }
-  };
+  const createChat = async (params: {
+    userId: string
+    sellerId: string
+    productId?: string
+    productName?: string
+  }) => {
+    const token = await getBearerToken()
+    const res = await fetch('/api/chat/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(params),
+    })
+    const result = await res.json()
+    if (!result.success) throw new Error(result.error || 'Failed to create chat')
+    return result.data as { chatId: string }
+  }
 
-  return { createChat };
+  return { createChat }
 }

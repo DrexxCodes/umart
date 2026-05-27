@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase-admin'
-import { Timestamp, FieldValue } from 'firebase-admin/firestore'
+import { Timestamp } from 'firebase-admin/firestore'
 import { upsertPendingChatNotification } from '@/lib/fcm'
+import { tasks } from '@trigger.dev/sdk/v3'
+import type { ChatNotifyPayload } from '@/trigger/chat-notify'
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,7 +37,7 @@ export async function POST(req: NextRequest) {
     const messageRef = adminDb.collection('chats').doc(chatId).collection('messages').doc()
     const batch = adminDb.batch()
 
-    // ── Write message with seen: false so the recipient can track unread ──
+    // ── Write message ─────────────────────────────────────────────────────────
     batch.set(messageRef, {
       senderId: userId,
       senderName,
@@ -44,10 +46,10 @@ export async function POST(req: NextRequest) {
       isSystemAdmin: senderRoles.isAdmin || false,
       isCreator,
       isAI: false,
-      seen: false,          // <-- NEW: unread by default
+      seen: false,
     })
 
-    // ── Update the main chat doc ──
+    // ── Update the main chat doc ──────────────────────────────────────────────
     batch.update(adminDb.collection('chats').doc(chatId), {
       lastMessage: text.trim(),
       lastMessageTime: now,
@@ -55,8 +57,7 @@ export async function POST(req: NextRequest) {
       updatedAt: now,
     })
 
-    // ── Update each participant's chats sub-doc lastMessageTime so the
-    //    ChatList can sort by it in real time ────────────────────────────
+    // ── Update each participant's chats sub-doc so ChatList sorts correctly ───
     for (const participantId of chatData.participantIds as string[]) {
       batch.update(
         adminDb.collection('users').doc(participantId).collection('chats').doc(chatId),
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     await batch.commit()
 
-    // ── AI reply (non-blocking) ────────────────────────────────────────────
+    // ── AI reply (non-blocking, fire-and-forget) ──────────────────────────────
     if (!isCreator && !senderRoles.isAdmin) {
       const aiEnabled = chatData.aiEnabled ?? false
       const humanTookOver = chatData.humanTookOver ?? false
@@ -79,26 +80,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Push notification (non-blocking, 30-second debounce) ───────────────
-    const recipientId = chatData.participantIds.find((id: string) => id !== userId)
+    // ── Push notification via Trigger.dev (debounced 30s, durable) ───────────
+    const recipientId = (chatData.participantIds as string[]).find((id) => id !== userId)
     if (recipientId) {
       const notifDocId = `${chatId}_${recipientId}`
+
       upsertPendingChatNotification(chatId, recipientId, userId, senderName)
-        .then((count) => {
+        .then(async (count) => {
+          // Only trigger a new job on the FIRST message in the debounce window.
+          // Subsequent messages in the same window just increment the counter on
+          // the Firestore doc — the already-queued job picks up the final count.
           if (count === 1) {
-            setTimeout(() => {
-              fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/chat/notify`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'x-internal-secret': process.env.INTERNAL_API_SECRET || '',
-                },
-                body: JSON.stringify({ notifDocId }),
-              }).catch((err) => console.error('Chat notify trigger failed:', err))
-            }, 30_000)
+            await tasks.trigger<ChatNotifyPayload>('chat-notify', {
+              notifDocId,
+              chatId,
+              recipientId,
+              senderName,
+            })
           }
         })
-        .catch((err) => console.error('upsertPendingChatNotification failed:', err))
+        .catch((err) => console.error('Push notification scheduling failed:', err))
     }
 
     return NextResponse.json(

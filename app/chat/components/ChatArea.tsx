@@ -487,12 +487,28 @@ export function ChatArea({ chatId, showTakeoverButton = false }: ChatAreaProps) 
         <div ref={messagesEndRef} className="h-1" />
       </div>
 
-      <ChatBox
-        chatId={chatId}
-        onSendMessage={handleSendMessage}
-        disabled={!chatId}
-        isLoading={messageSending}
-      />
+      {/* Hide the input while AI is negotiating — creator must click Take Over first */}
+      {showTakeoverButton && isAIActive ? (
+        <div className="shrink-0 px-4 py-3 border-t border-border bg-violet-50 dark:bg-violet-950/30 flex items-center justify-between gap-3">
+          <p className="text-xs text-violet-700 dark:text-violet-300 leading-snug">
+            🤖 <strong>Clara is handling this chat.</strong> Take over to reply manually.
+          </p>
+          <button
+            onClick={handleTakeover}
+            disabled={takeoverLoading}
+            className="shrink-0 text-xs bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 rounded-full font-medium transition-colors disabled:opacity-50"
+          >
+            {takeoverLoading ? 'Taking over…' : 'Take Over'}
+          </button>
+        </div>
+      ) : (
+        <ChatBox
+          chatId={chatId}
+          onSendMessage={handleSendMessage}
+          disabled={!chatId}
+          isLoading={messageSending}
+        />
+      )}
     </div>
   )
 }

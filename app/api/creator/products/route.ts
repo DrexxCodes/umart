@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
 
     const {
       category,
+      subCategory,
       brand,
       model,
       searchKeywords,
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
       userId,
       title,
       category,
+      subCategory: subCategory || null,
       brand,
       model: model || '',
       searchKeywords: Array.isArray(searchKeywords) ? searchKeywords : [],
@@ -126,6 +128,18 @@ export async function POST(req: NextRequest) {
       .collection('products')
       .doc(productId)
     batch.set(categoryProductRef, { ...productData, categoryId: category })
+
+    // Mirror into subcategory products collection if a sub was selected
+    if (subCategory) {
+      const subProductRef = adminDb
+        .collection('productCategories')
+        .doc(category)
+        .collection('sub')
+        .doc(subCategory)
+        .collection('products')
+        .doc(productId)
+      batch.set(subProductRef, { ...productData, categoryId: category, subCategoryId: subCategory })
+    }
 
     const userProductRef = adminDb
       .collection('users')

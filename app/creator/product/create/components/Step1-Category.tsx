@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { useState, useEffect } from 'react'
-import { ChevronDown, Info } from 'lucide-react'
+import { ChevronDown, Info, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,11 +10,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 interface Step1Props {
   data: {
     category: string
+    subCategory: string
     brand: string
     model: string
   }
   onChange: (data: any) => void
   onNext: () => void
+}
+
+interface CategoryItem {
+  id: string
+  name: string
+  displayName: string
+}
+
+interface SubCategoryItem {
+  id: string
+  name: string
+  displayName: string
 }
 
 const BRAND_WORDS = [
@@ -31,40 +44,66 @@ const MODEL_WORDS = [
 ]
 
 export function Step1Category({ data, onChange, onNext }: Step1Props) {
-  const [categories, setCategories] = useState<{ id: string; name: string; displayName: string }[]>([])
-  const [loading, setLoading] = useState(true)
-  const [currentBrand, setCurrentBrand] = useState(0)
-  const [currentModel, setCurrentModel] = useState(0)
+  const [categories, setCategories]           = useState<CategoryItem[]>([])
+  const [subCategories, setSubCategories]     = useState<SubCategoryItem[]>([])
+  const [loadingCats, setLoadingCats]         = useState(true)
+  const [loadingSubs, setLoadingSubs]         = useState(false)
+  const [currentBrand, setCurrentBrand]       = useState(0)
+  const [currentModel, setCurrentModel]       = useState(0)
 
-  useEffect(() => { fetchCategories() }, [])
-
+  // ── Fetch categories once ─────────────────────────────────────────────────
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentBrand((prev) => (prev + 1) % BRAND_WORDS.length)
-    }, 3000)
-    return () => clearInterval(interval)
+    fetchCategories()
+  }, [])
+
+  // ── Rotating placeholders ─────────────────────────────────────────────────
+  useEffect(() => {
+    const t = setInterval(() => setCurrentBrand((p) => (p + 1) % BRAND_WORDS.length), 3000)
+    return () => clearInterval(t)
   }, [])
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentModel((prev) => (prev + 1) % MODEL_WORDS.length)
-    }, 3500)
-    return () => clearInterval(interval)
+    const t = setInterval(() => setCurrentModel((p) => (p + 1) % MODEL_WORDS.length), 3500)
+    return () => clearInterval(t)
   }, [])
+
+  // ── Fetch subs when category changes ─────────────────────────────────────
+  useEffect(() => {
+    if (!data.category) {
+      setSubCategories([])
+      return
+    }
+    fetchSubCategories(data.category)
+  }, [data.category])
 
   async function fetchCategories() {
     try {
-      const response = await fetch('/api/creator/products/categories')
-      const result = await response.json()
+      const res    = await fetch('/api/creator/products/categories')
+      const result = await res.json()
       if (result.success) setCategories(result.data)
-    } catch (error) {
-      console.error('Error fetching categories:', error)
+    } catch (err) {
+      console.error('Error fetching categories:', err)
     } finally {
-      setLoading(false)
+      setLoadingCats(false)
     }
   }
 
-  // brand required; model is optional but encouraged
+  async function fetchSubCategories(categoryId: string) {
+    setLoadingSubs(true)
+    setSubCategories([])
+    // Clear any previously chosen sub when category switches
+    onChange({ ...data, subCategory: '' })
+    try {
+      const res    = await fetch(`/api/creator/products/categories/${categoryId}/sub`)
+      const result = await res.json()
+      if (result.success) setSubCategories(result.data)
+    } catch (err) {
+      console.error('Error fetching subcategories:', err)
+    } finally {
+      setLoadingSubs(false)
+    }
+  }
+
   const canProceed = !!(data.category && data.brand.trim())
 
   return (
@@ -75,7 +114,7 @@ export function Step1Category({ data, onChange, onNext }: Step1Props) {
       </CardHeader>
       <CardContent className="space-y-6">
 
-        {/* Category */}
+        {/* ── Category ───────────────────────────────────────────────────── */}
         <div className="space-y-2">
           <label className="text-sm font-medium">
             Product Category <span className="text-destructive">*</span>
@@ -83,10 +122,13 @@ export function Step1Category({ data, onChange, onNext }: Step1Props) {
           <div className="relative">
             <select
               value={data.category}
-              onChange={(e) => onChange({ ...data, category: e.target.value })}
-              className="w-full px-4 py-2.5 rounded-lg border border-border bg-background text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary"
+              onChange={(e) => onChange({ ...data, category: e.target.value, subCategory: '' })}
+              disabled={loadingCats}
+              className="w-full px-4 py-2.5 rounded-lg border border-border bg-background text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
             >
-              <option value="">Select a category...</option>
+              <option value="">
+                {loadingCats ? 'Loading categories…' : 'Select a category…'}
+              </option>
               {categories.map((cat) => (
                 <option key={cat.id} value={cat.id}>
                   {cat.displayName || cat.name || cat.id}
@@ -97,9 +139,46 @@ export function Step1Category({ data, onChange, onNext }: Step1Props) {
           </div>
         </div>
 
+        {/* ── Sub-category (appears once a category is chosen) ───────────── */}
+        {data.category && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium">Subcategory</label>
+              <span className="text-xs text-muted-foreground">(optional)</span>
+            </div>
+
+            {loadingSubs ? (
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border bg-muted/40 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Loading subcategories…
+              </div>
+            ) : subCategories.length === 0 ? (
+              <p className="text-xs text-muted-foreground px-1">
+                No subcategories available for this category.
+              </p>
+            ) : (
+              <div className="relative">
+                <select
+                  value={data.subCategory}
+                  onChange={(e) => onChange({ ...data, subCategory: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-lg border border-border bg-background text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">None — general listing</option>
+                  {subCategories.map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.displayName || sub.name || sub.id}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-3 w-5 h-5 text-muted-foreground pointer-events-none" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Brand / Model (shown once category is chosen) ──────────────── */}
         {data.category && (
           <>
-            {/* Brand — REQUIRED */}
             <div className="space-y-2">
               <label className="text-sm font-medium">
                 Brand Name <span className="text-destructive">*</span>
@@ -111,11 +190,10 @@ export function Step1Category({ data, onChange, onNext }: Step1Props) {
                 placeholder={BRAND_WORDS[currentBrand]}
               />
               <p className="text-xs text-muted-foreground">
-                e.g. {BRAND_WORDS.slice(0, 4).join(', ')}...
+                e.g. {BRAND_WORDS.slice(0, 4).join(', ')}…
               </p>
             </div>
 
-            {/* Model — OPTIONAL but encouraged */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium">Model Name</label>

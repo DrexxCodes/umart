@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb } from '@/lib/firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
+import { upsertPendingChatNotification } from '@/lib/fcm'
+import { tasks } from '@trigger.dev/sdk/v3'
+import type { ChatNotifyPayload } from '@/trigger/chat-notify'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AI_BOT_SENDER_ID = 'ai-negotiator'
@@ -255,6 +258,26 @@ export async function POST(req: NextRequest) {
     }
 
     await batch.commit()
+
+    // ── Notify buyer that Clara replied (non-blocking, 30s debounce via Trigger.dev) ──
+    // The buyer is whoever is NOT the creator
+    const buyerId = chatData.participantIds?.find((id: string) => id !== creatorId)
+    if (buyerId && visibleReply) {
+      const notifDocId = `${chatId}_${buyerId}`
+      upsertPendingChatNotification(chatId, buyerId, AI_BOT_SENDER_ID, AI_BOT_NAME)
+        .then(async (count) => {
+          if (count === 1) {
+            await tasks.trigger<ChatNotifyPayload>('chat-notify', {
+              notifDocId,
+              chatId,
+              recipientId: buyerId,
+              senderName: AI_BOT_NAME,
+            })
+          }
+        })
+        .catch((err) => console.error('[ai-reply] Push notification scheduling failed:', err))
+    }
+
     return NextResponse.json({ success: true, replied: true, dealReached: !!agreedAmount })
   } catch (error: any) {
     console.error('AI reply error:', error)

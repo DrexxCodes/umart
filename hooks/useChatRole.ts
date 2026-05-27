@@ -24,7 +24,8 @@ export function useChatRole() {
 
       try {
         const token = await user.getIdToken()
-        const response = await fetch(`/api/v1/users?uid=${user.uid}`, {
+        // Use the correct /api/users/me endpoint (no uid param needed — server reads from token)
+        const response = await fetch('/api/users/me', {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -34,8 +35,8 @@ export function useChatRole() {
           throw new Error('Failed to fetch user data')
         }
 
-        const userData = await response.json()
-        const userRoles = userData.data?.roles || {}
+        const result = await response.json()
+        const userRoles = result.data?.roles || {}
 
         const isAdmin = userRoles.isAdmin || false
         const isCreator = userRoles.isCreator || false
@@ -52,18 +53,11 @@ export function useChatRole() {
           roleLabel = 'buyer'
         }
 
-        setRole({
-          isAdmin,
-          isCreator,
-          role: roleLabel,
-        })
+        setRole({ isAdmin, isCreator, role: roleLabel })
       } catch (error) {
         console.error('Error fetching user role:', error)
-        setRole({
-          isAdmin: false,
-          isCreator: false,
-          role: 'buyer',
-        })
+        // Default to buyer role on error rather than failing silently
+        setRole({ isAdmin: false, isCreator: false, role: 'buyer' })
       } finally {
         setLoading(false)
       }
