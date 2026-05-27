@@ -3,7 +3,7 @@ import { adminDb } from '@/lib/firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
 import { upsertPendingChatNotification } from '@/lib/fcm'
 import { tasks } from '@trigger.dev/sdk/v3'
-import type { ChatNotifyPayload } from '@/trigger/chat-notify'
+import type { ChatNotifyPayload } from '@/src/trigger/chat-notify'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AI_BOT_SENDER_ID = 'ai-negotiator'
@@ -267,7 +267,7 @@ export async function POST(req: NextRequest) {
       upsertPendingChatNotification(chatId, buyerId, AI_BOT_SENDER_ID, AI_BOT_NAME)
         .then(async (count) => {
           if (count === 1) {
-            await tasks.trigger<ChatNotifyPayload>('chat-notify', {
+            await tasks.trigger('chat-notify', {
               notifDocId,
               chatId,
               recipientId: buyerId,
