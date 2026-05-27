@@ -3,7 +3,7 @@ import { adminDb, adminAuth } from '@/lib/firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
 import { upsertPendingChatNotification } from '@/lib/fcm'
 import { tasks } from '@trigger.dev/sdk/v3'
-import type { ChatNotifyPayload } from '@/trigger/chat-notify'
+import type { ChatNotifyPayload } from '@/src/trigger/chat-notify'
 
 export async function POST(req: NextRequest) {
   try {
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
           // Subsequent messages in the same window just increment the counter on
           // the Firestore doc — the already-queued job picks up the final count.
           if (count === 1) {
-            await tasks.trigger<ChatNotifyPayload>('chat-notify', {
+            await tasks.trigger('chat-notify', {
               notifDocId,
               chatId,
               recipientId,
